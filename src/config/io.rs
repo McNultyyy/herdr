@@ -9,6 +9,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "experimental",
     "keys",
     "onboarding",
+    "plugins",
     "remote",
     "server",
     "session",
@@ -1030,6 +1031,40 @@ mouse_captur = true
         let _ = std::fs::remove_file(path);
 
         assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+    }
+
+    #[test]
+    fn startup_config_load_accepts_the_plugins_section() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "herdr-config-plugins-section-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"
+[plugins]
+workspace_menu = "none"
+workspace_menu_actions = ["worktrunk.from-issue"]
+"#,
+        )
+        .unwrap();
+        std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
+
+        let loaded = Config::load();
+
+        std::env::remove_var(CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_file(path);
+
+        assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+        assert_eq!(
+            loaded.config.plugins.workspace_menu,
+            super::super::WorkspaceMenuConfig::None
+        );
+        assert_eq!(
+            loaded.config.plugins.workspace_menu_actions,
+            vec!["worktrunk.from-issue".to_string()]
+        );
     }
 
     #[test]
