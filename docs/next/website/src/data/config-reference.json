@@ -1417,6 +1417,28 @@
       ]
     },
     {
+      "id": "plugins",
+      "title": "Plugins",
+      "keys": [
+        {
+          "key": "plugins.workspace_menu",
+          "type": "enum",
+          "default": "all",
+          "description": "Which plugin actions declaring contexts = [\"workspace\"] appear in the workspace right-click menu. all lists every such action from every enabled plugin; none lists none. Ignored when plugins.workspace_menu_actions is non-empty.",
+          "values": [
+            "all",
+            "none"
+          ]
+        },
+        {
+          "key": "plugins.workspace_menu_actions",
+          "type": "list of strings",
+          "default": "[]",
+          "description": "Qualified plugin action ids (for example \"worktrunk.from-issue\") to show in the workspace right-click menu, in this order. When non-empty it replaces plugins.workspace_menu; ids that are unknown, disabled, or unsupported on this platform are skipped."
+        }
+      ]
+    },
+    {
       "id": "remote",
       "title": "Remote",
       "keys": [

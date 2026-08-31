@@ -324,6 +324,7 @@ pub struct Config {
     pub keys: KeysConfig,
     pub ui: UiConfig,
     pub worktrees: WorktreesConfig,
+    pub plugins: PluginsConfig,
     pub advanced: AdvancedConfig,
     pub experimental: ExperimentalConfig,
     pub remote: RemoteConfig,
@@ -835,6 +836,27 @@ pub struct IndexedKeysConfig {
 pub struct WorktreesConfig {
     /// Root directory under which Herdr creates <repo>/<branch-slug> checkouts.
     pub directory: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct PluginsConfig {
+    /// Which plugin actions declaring contexts = ["workspace"] appear in the
+    /// workspace right-click menu. Ignored when workspace_menu_actions is set.
+    pub workspace_menu: WorkspaceMenuConfig,
+    /// Qualified plugin action ids ("worktrunk.from-issue") to show in the
+    /// workspace right-click menu, in this order. Replaces workspace_menu.
+    pub workspace_menu_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMenuConfig {
+    /// Every workspace action from every enabled plugin.
+    #[default]
+    All,
+    /// No plugin actions in the menu.
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]

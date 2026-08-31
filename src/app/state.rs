@@ -1279,16 +1279,50 @@ pub enum ContextMenuKind {
     },
 }
 
+/// A plugin action offered in a context menu, resolved when the menu opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextMenuPluginItem {
+    pub plugin_id: String,
+    pub action_id: String,
+    pub title: String,
+}
+
+impl ContextMenuPluginItem {
+    pub fn qualified_id(&self) -> String {
+        format!("{}.{}", self.plugin_id, self.action_id)
+    }
+}
+
 /// Right-click context menu state.
 pub struct ContextMenuState {
     pub kind: ContextMenuKind,
     pub x: u16,
     pub y: u16,
     pub list: MenuListState,
+    /// Plugin actions listed after the built-in items. Resolved once, when the
+    /// menu opens, so the list a click lands on is the one that was drawn.
+    pub plugin_items: Vec<ContextMenuPluginItem>,
 }
 
 impl ContextMenuState {
-    pub fn items(&self) -> Vec<&'static str> {
+    /// The full menu: Herdr's own items, then any plugin actions.
+    pub fn items(&self) -> Vec<String> {
+        let mut items: Vec<String> = self
+            .builtin_items()
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        items.extend(self.plugin_items.iter().map(|item| item.title.clone()));
+        items
+    }
+
+    /// The plugin action at a menu index, or None for a built-in item.
+    pub fn plugin_item(&self, idx: usize) -> Option<&ContextMenuPluginItem> {
+        idx.checked_sub(self.builtin_items().len())
+            .and_then(|plugin_idx| self.plugin_items.get(plugin_idx))
+    }
+
+    pub fn builtin_items(&self) -> Vec<&'static str> {
         match self.kind {
             ContextMenuKind::Workspace { .. } => vec!["Rename", "Close"],
             ContextMenuKind::GitWorkspace {
@@ -1534,6 +1568,11 @@ pub struct AppState {
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
     pub sidebar_agents: crate::config::AgentsSidebarConfig,
     pub sidebar_spaces: crate::config::SpacesSidebarConfig,
+    /// Whether plugin workspace actions are listed in the workspace context menu.
+    pub plugin_workspace_menu: crate::config::WorkspaceMenuConfig,
+    /// Qualified plugin action ids to list there instead, in order. Empty means
+    /// `plugin_workspace_menu` decides.
+    pub plugin_workspace_menu_actions: Vec<String>,
     pub next_agent_state_change_seq: u64,
     /// Capture mouse input for Herdr's own mouse UI. When false, Herdr only
     /// captures mouse while the focused pane app requests mouse reporting.
@@ -1824,6 +1863,65 @@ pub fn key_matches(
 // Test helpers
 // ---------------------------------------------------------------------------
 
+/// A manifest action for tests, with no platform restriction.
+#[cfg(test)]
+pub(crate) fn test_plugin_action(
+    id: &str,
+    title: &str,
+    contexts: Vec<crate::api::schema::PluginActionContext>,
+) -> crate::api::schema::PluginManifestAction {
+    crate::api::schema::PluginManifestAction {
+        id: id.into(),
+        title: title.into(),
+        description: None,
+        contexts,
+        platforms: None,
+        command: vec!["true".into()],
+    }
+}
+
+/// An enabled, linked plugin for tests, rooted at the temp dir.
+#[cfg(test)]
+pub(crate) fn test_plugin_info(
+    plugin_id: &str,
+    actions: Vec<crate::api::schema::PluginManifestAction>,
+) -> crate::api::schema::InstalledPluginInfo {
+    let root = std::env::temp_dir();
+    crate::api::schema::InstalledPluginInfo {
+        plugin_id: plugin_id.into(),
+        name: plugin_id.into(),
+        version: "0.1.0".into(),
+        min_herdr_version: "0.8.0".into(),
+        description: None,
+        manifest_path: root.join("herdr-plugin.toml").display().to_string(),
+        plugin_root: root.display().to_string(),
+        enabled: true,
+        platforms: None,
+        build: Vec::new(),
+        startup: Vec::new(),
+        actions,
+        events: Vec::new(),
+        panes: Vec::new(),
+        link_handlers: Vec::new(),
+        source: crate::api::schema::PluginSourceInfo::default(),
+        warnings: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+impl AppState {
+    /// Register the given plugins as the installed registry.
+    pub(crate) fn install_test_plugins(
+        &mut self,
+        plugins: Vec<crate::api::schema::InstalledPluginInfo>,
+    ) {
+        self.installed_plugins = plugins
+            .into_iter()
+            .map(|plugin| (plugin.plugin_id.clone(), plugin))
+            .collect();
+    }
+}
+
 #[cfg(test)]
 impl AppState {
     /// Create an AppState for testing — no channels, no PTYs.
@@ -1928,6 +2026,8 @@ impl AppState {
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
+            plugin_workspace_menu: crate::config::WorkspaceMenuConfig::All,
+            plugin_workspace_menu_actions: Vec::new(),
             next_agent_state_change_seq: 0,
             mouse_capture: true,
             copy_on_select: true,
@@ -2633,10 +2733,11 @@ mod tests {
             x: 0,
             y: 0,
             list: MenuListState::new(0),
+            plugin_items: Vec::new(),
         };
 
         assert_eq!(
-            menu.items(),
+            menu.builtin_items(),
             &["Rename", "Close", "Delete worktree checkout..."]
         );
     }
@@ -2653,12 +2754,37 @@ mod tests {
             x: 0,
             y: 0,
             list: MenuListState::new(0),
+            plugin_items: Vec::new(),
         };
 
         assert_eq!(
-            menu.items(),
+            menu.builtin_items(),
             &["Rename", "Close", "New worktree", "Open worktree..."]
         );
+    }
+
+    #[test]
+    fn plugin_actions_follow_the_builtin_items_and_map_back_by_index() {
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::Workspace { ws_idx: 0 },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+            plugin_items: vec![ContextMenuPluginItem {
+                plugin_id: "worktrunk".into(),
+                action_id: "from-issue".into(),
+                title: "Worktree: from an issue".into(),
+            }],
+        };
+
+        assert_eq!(menu.items(), ["Rename", "Close", "Worktree: from an issue"]);
+        assert!(menu.plugin_item(0).is_none(), "Rename is Herdr's own item");
+        assert!(menu.plugin_item(1).is_none(), "Close is Herdr's own item");
+        assert_eq!(
+            menu.plugin_item(2).map(ContextMenuPluginItem::qualified_id),
+            Some("worktrunk.from-issue".to_string())
+        );
+        assert!(menu.plugin_item(3).is_none(), "past the end of the menu");
     }
 
     #[test]
@@ -2673,10 +2799,11 @@ mod tests {
             x: 0,
             y: 0,
             list: MenuListState::new(0),
+            plugin_items: Vec::new(),
         };
 
         assert_eq!(
-            menu.items(),
+            menu.builtin_items(),
             &[
                 "Rename",
                 "Close group",

@@ -1082,6 +1082,7 @@ impl AppState {
                         x: mouse.column,
                         y: mouse.row,
                         list: MenuListState::new(0),
+                        plugin_items: self.workspace_menu_plugin_items(),
                     });
                     self.mode = Mode::ContextMenu;
                 }
@@ -1099,6 +1100,7 @@ impl AppState {
                         x: mouse.column,
                         y: mouse.row,
                         list: MenuListState::new(0),
+                        plugin_items: Vec::new(),
                     });
                     self.mode = Mode::ContextMenu;
                 }
@@ -1139,6 +1141,7 @@ impl AppState {
                         x: mouse.column,
                         y: mouse.row,
                         list: MenuListState::new(0),
+                        plugin_items: Vec::new(),
                     });
                     self.mode = Mode::ContextMenu;
                 }
@@ -1251,7 +1254,7 @@ impl AppState {
         let max_item_w = menu
             .items()
             .iter()
-            .map(|item| item.len() as u16)
+            .map(|item| item.chars().count() as u16)
             .max()
             .unwrap_or(0);
         let menu_w = (max_item_w + 4).max(14).min(screen.width.max(1));
@@ -3151,7 +3154,10 @@ mod tests {
                 ..
             } if pane_id == target && source_pane_id == source
         ));
-        assert!(menu.items().contains(&"Swap with focused pane"));
+        assert!(menu
+            .items()
+            .iter()
+            .any(|item| item == "Swap with focused pane"));
     }
 
     #[tokio::test]
@@ -3276,6 +3282,58 @@ mod tests {
         }
     }
 
+    /// The whole open-the-menu path: a right-click on a workspace row resolves
+    /// the installed plugins' workspace actions and lists them after Herdr's own.
+    #[test]
+    fn right_clicking_a_workspace_row_lists_plugin_workspace_actions() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("repo")];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigate;
+        app.state
+            .install_test_plugins(vec![crate::app::state::test_plugin_info(
+                "worktrunk",
+                vec![
+                    crate::app::state::test_plugin_action(
+                        "from-issue",
+                        "Worktree: from an issue",
+                        vec![crate::api::schema::PluginActionContext::Workspace],
+                    ),
+                    crate::app::state::test_plugin_action(
+                        "copy-id",
+                        "Copy pane id",
+                        vec![crate::api::schema::PluginActionContext::Pane],
+                    ),
+                ],
+            )]);
+
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let row = app.state.view.workspace_card_areas[0].rect;
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            row.x + 1,
+            row.y,
+        ));
+
+        let menu = app.state.context_menu.as_ref().expect("workspace menu");
+        let items = menu.items();
+        assert_eq!(
+            items.last().map(String::as_str),
+            Some("Worktree: from an issue"),
+            "plugin actions come after Herdr's own items: {items:?}"
+        );
+        assert!(
+            !items.iter().any(|item| item == "Copy pane id"),
+            "a pane-context action has no business in a workspace menu: {items:?}"
+        );
+        assert_eq!(
+            menu.plugin_item(items.len() - 1)
+                .map(crate::app::state::ContextMenuPluginItem::qualified_id),
+            Some("worktrunk.from-issue".to_string())
+        );
+    }
+
     #[test]
     fn hovering_context_menu_updates_highlight() {
         let mut app = app_for_mouse_test();
@@ -3284,6 +3342,7 @@ mod tests {
             x: 2,
             y: 2,
             list: MenuListState::new(0),
+            plugin_items: Vec::new(),
         });
         app.state.mode = Mode::ContextMenu;
 
@@ -3578,6 +3637,7 @@ mod tests {
             x: 2,
             y: 2,
             list: MenuListState::new(1),
+            plugin_items: Vec::new(),
         });
         app.state.mode = Mode::ContextMenu;
         handle_context_menu_key(
@@ -3618,6 +3678,7 @@ mod tests {
             x: 2,
             y: 2,
             list: MenuListState::new(1),
+            plugin_items: Vec::new(),
         });
         app.state.mode = Mode::ContextMenu;
 

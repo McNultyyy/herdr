@@ -1,6 +1,7 @@
 mod context;
 mod env;
 mod manifest;
+mod menu;
 mod panes;
 mod runtime;
 
