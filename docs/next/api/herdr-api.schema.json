@@ -8342,6 +8342,13 @@
                 "null"
               ]
             },
+            "replaces": {
+              "description": "Built-in menu items this action supersedes, so Herdr can drop them while\nthis action is listed. See `BUILTIN_MENU_ITEM_IDS`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "title": {
               "type": "string"
             }

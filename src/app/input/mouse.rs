@@ -1077,7 +1077,7 @@ impl AppState {
                             })
                         })
                         .unwrap_or(ContextMenuKind::Workspace { ws_idx: idx });
-                    let plugin_items = self.workspace_menu_plugin_items(matches!(
+                    let plugins = self.workspace_menu_plugins(matches!(
                         kind,
                         ContextMenuKind::GitWorkspace { .. }
                     ));
@@ -1086,7 +1086,8 @@ impl AppState {
                         x: mouse.column,
                         y: mouse.row,
                         list: MenuListState::new(0),
-                        plugin_items,
+                        plugin_items: plugins.items,
+                        hidden_builtins: plugins.hidden_builtins,
                     });
                     self.mode = Mode::ContextMenu;
                 }
@@ -1105,6 +1106,7 @@ impl AppState {
                         y: mouse.row,
                         list: MenuListState::new(0),
                         plugin_items: Vec::new(),
+                        hidden_builtins: Vec::new(),
                     });
                     self.mode = Mode::ContextMenu;
                 }
@@ -1146,6 +1148,7 @@ impl AppState {
                         y: mouse.row,
                         list: MenuListState::new(0),
                         plugin_items: Vec::new(),
+                        hidden_builtins: Vec::new(),
                     });
                     self.mode = Mode::ContextMenu;
                 }
@@ -3397,6 +3400,7 @@ mod tests {
             y: 2,
             list: MenuListState::new(0),
             plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         });
         app.state.mode = Mode::ContextMenu;
 
@@ -3692,6 +3696,7 @@ mod tests {
             y: 2,
             list: MenuListState::new(1),
             plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         });
         app.state.mode = Mode::ContextMenu;
         handle_context_menu_key(
@@ -3733,6 +3738,7 @@ mod tests {
             y: 2,
             list: MenuListState::new(1),
             plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         });
         app.state.mode = Mode::ContextMenu;
 

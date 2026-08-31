@@ -120,6 +120,16 @@ warning.
 there is no shell expansion unless your command starts a shell itself. Put
 language-specific behavior in your script or binary.
 
+An action with `contexts = ["workspace"]` is listed in the workspace
+right-click menu, after Herdr's own entries. `plugins.workspace_menu` decides
+which workspaces get them — git ones only by default — and
+`plugins.workspace_menu_actions` narrows and orders them. An action that
+supersedes a built-in entry can say so with
+`replaces = ["new_worktree", "open_worktree"]`, and Herdr leaves that entry out
+while the action is listed rather than offering both. The replaceable ids are
+`new_worktree`, `open_worktree`, and `remove_worktree`; anything else links
+with a warning and hides nothing.
+
 ## First plugin
 
 Start with a directory that contains `herdr-plugin.toml` and one executable

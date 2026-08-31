@@ -1302,6 +1302,8 @@ pub struct ContextMenuState {
     /// Plugin actions listed after the built-in items. Resolved once, when the
     /// menu opens, so the list a click lands on is the one that was drawn.
     pub plugin_items: Vec<ContextMenuPluginItem>,
+    /// Built-in items left out because a listed plugin action replaces them.
+    pub hidden_builtins: Vec<&'static str>,
 }
 
 impl ContextMenuState {
@@ -1322,7 +1324,15 @@ impl ContextMenuState {
             .and_then(|plugin_idx| self.plugin_items.get(plugin_idx))
     }
 
+    /// Herdr's own items for this menu, minus any a plugin action replaces.
     pub fn builtin_items(&self) -> Vec<&'static str> {
+        self.all_builtin_items()
+            .into_iter()
+            .filter(|item| !self.hidden_builtins.contains(item))
+            .collect()
+    }
+
+    fn all_builtin_items(&self) -> Vec<&'static str> {
         match self.kind {
             ContextMenuKind::Workspace { .. } => vec!["Rename", "Close"],
             ContextMenuKind::GitWorkspace {
@@ -1875,6 +1885,7 @@ pub(crate) fn test_plugin_action(
         title: title.into(),
         description: None,
         contexts,
+        replaces: Vec::new(),
         platforms: None,
         command: vec!["true".into()],
     }
@@ -2734,6 +2745,7 @@ mod tests {
             y: 0,
             list: MenuListState::new(0),
             plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
 
         assert_eq!(
@@ -2755,12 +2767,45 @@ mod tests {
             y: 0,
             list: MenuListState::new(0),
             plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
 
         assert_eq!(
             menu.builtin_items(),
             &["Rename", "Close", "New worktree", "Open worktree..."]
         );
+    }
+
+    #[test]
+    fn a_replaced_builtin_leaves_the_menu_and_the_indexes_close_up() {
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::GitWorkspace {
+                ws_idx: 0,
+                is_linked_worktree: false,
+                has_worktree_children: false,
+                collapsed: false,
+            },
+            x: 0,
+            y: 0,
+            list: MenuListState::new(0),
+            plugin_items: vec![ContextMenuPluginItem {
+                plugin_id: "worktrunk".into(),
+                action_id: "open".into(),
+                title: "Worktree: switch / create".into(),
+            }],
+            hidden_builtins: vec!["New worktree", "Open worktree..."],
+        };
+
+        assert_eq!(
+            menu.items(),
+            ["Rename", "Close", "Worktree: switch / create"]
+        );
+        // The plugin action moved up with them, and still maps back.
+        assert_eq!(
+            menu.plugin_item(2).map(ContextMenuPluginItem::qualified_id),
+            Some("worktrunk.open".to_string())
+        );
+        assert!(menu.plugin_item(1).is_none());
     }
 
     #[test]
@@ -2775,6 +2820,7 @@ mod tests {
                 action_id: "from-issue".into(),
                 title: "Worktree: from an issue".into(),
             }],
+            hidden_builtins: Vec::new(),
         };
 
         assert_eq!(menu.items(), ["Rename", "Close", "Worktree: from an issue"]);
@@ -2800,6 +2846,7 @@ mod tests {
             y: 0,
             list: MenuListState::new(0),
             plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
 
         assert_eq!(

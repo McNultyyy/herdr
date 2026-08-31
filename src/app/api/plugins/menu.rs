@@ -26,18 +26,18 @@ impl AppState {
     /// by default that is git ones only: a plugin's workspace actions are
     /// almost always git actions, and a plain directory gives them nothing to
     /// act on.
-    pub(crate) fn workspace_menu_plugin_items(
-        &self,
-        is_git_workspace: bool,
-    ) -> Vec<ContextMenuPluginItem> {
+    pub(crate) fn workspace_menu_plugins(&self, is_git_workspace: bool) -> WorkspaceMenuPlugins {
         use crate::config::WorkspaceMenuConfig;
         match self.plugin_workspace_menu {
-            WorkspaceMenuConfig::None => return Vec::new(),
-            WorkspaceMenuConfig::Git if !is_git_workspace => return Vec::new(),
+            WorkspaceMenuConfig::None => return WorkspaceMenuPlugins::default(),
+            WorkspaceMenuConfig::Git if !is_git_workspace => {
+                return WorkspaceMenuPlugins::default()
+            }
             _ => {}
         }
 
         let allowlist = &self.plugin_workspace_menu_actions;
+        let mut replaced: Vec<(String, &'static str)> = Vec::new();
         let mut items: Vec<ContextMenuPluginItem> = Vec::new();
         for plugin in self.installed_plugins.values() {
             if !plugin.enabled || !plugin_manifest_available(plugin) {
@@ -56,35 +56,69 @@ impl AppState {
                 {
                     continue;
                 }
-                items.push(ContextMenuPluginItem {
+                let item = ContextMenuPluginItem {
                     plugin_id: plugin.plugin_id.clone(),
                     action_id: action.id.clone(),
                     title: action.title.clone(),
-                });
+                };
+                // Kept beside the item, not applied yet: a built-in only goes
+                // away while the action claiming it survives the allowlist too.
+                for id in &action.replaces {
+                    if let Some(label) = crate::api::schema::builtin_menu_item_label(id) {
+                        replaced.push((item.qualified_id(), label));
+                    }
+                }
+                items.push(item);
             }
         }
 
-        if allowlist.is_empty() {
+        if !allowlist.is_empty() {
+            // An allowlist states the order too, and silently drops ids that name
+            // a plugin or action this session can't run.
+            items = allowlist
+                .iter()
+                .filter_map(|id| {
+                    items
+                        .iter()
+                        .find(|item| item.qualified_id() == *id)
+                        .cloned()
+                })
+                .collect();
+        } else {
             // The registry is a HashMap, so without this the menu would reshuffle
             // itself between opens.
             items.sort_by(|left, right| {
                 (&left.plugin_id, &left.action_id).cmp(&(&right.plugin_id, &right.action_id))
             });
-            return items;
         }
 
-        // An allowlist states the order too, and silently drops ids that name a
-        // plugin or action this session can't run.
-        allowlist
-            .iter()
-            .filter_map(|id| {
+        // Drop a built-in only while the action that supersedes it is on offer;
+        // an allowlist that leaves that action out gets the built-in back rather
+        // than a menu with no way to do the thing at all.
+        let hidden_builtins = replaced
+            .into_iter()
+            .filter(|(qualified_id, _)| {
                 items
                     .iter()
-                    .find(|item| item.qualified_id() == *id)
-                    .cloned()
+                    .any(|item| item.qualified_id() == *qualified_id)
             })
-            .collect()
+            .map(|(_, label)| label)
+            .collect::<Vec<_>>();
+
+        WorkspaceMenuPlugins {
+            items,
+            hidden_builtins,
+        }
     }
+}
+
+/// What a plugin contributes to one workspace context menu.
+#[derive(Debug, Default)]
+pub(crate) struct WorkspaceMenuPlugins {
+    /// Actions to list after Herdr's own items.
+    pub(crate) items: Vec<ContextMenuPluginItem>,
+    /// Built-in item labels to leave out, because a listed action replaces them.
+    pub(crate) hidden_builtins: Vec<&'static str>,
 }
 
 impl App {
@@ -173,6 +207,16 @@ mod tests {
 
     use crate::app::state::{test_plugin_action as action, test_plugin_info as plugin};
 
+    fn replacing_action(
+        id: &str,
+        title: &str,
+        replaces: Vec<&str>,
+    ) -> crate::api::schema::PluginManifestAction {
+        let mut declared = action(id, title, vec![PluginActionContext::Workspace]);
+        declared.replaces = replaces.into_iter().map(str::to_string).collect();
+        declared
+    }
+
     /// A platform this build is definitely not running on.
     fn foreign_platform() -> PluginPlatform {
         if cfg!(target_os = "windows") {
@@ -194,7 +238,8 @@ mod tests {
 
     fn titles_for(state: &AppState, is_git_workspace: bool) -> Vec<String> {
         state
-            .workspace_menu_plugin_items(is_git_workspace)
+            .workspace_menu_plugins(is_git_workspace)
+            .items
             .into_iter()
             .map(|item| item.title)
             .collect()
@@ -274,7 +319,7 @@ mod tests {
         )]);
         state.plugin_workspace_menu = WorkspaceMenuConfig::None;
 
-        assert!(state.workspace_menu_plugin_items(true).is_empty());
+        assert!(state.workspace_menu_plugins(true).items.is_empty());
     }
 
     #[test]
@@ -369,6 +414,7 @@ mod tests {
             y: 0,
             list: crate::app::state::MenuListState::new(0),
             plugin_items: vec![menu_item()],
+            hidden_builtins: Vec::new(),
         };
         let plugin_idx = menu.builtin_items().len();
         app.state.mode = crate::app::Mode::ContextMenu;
@@ -404,6 +450,7 @@ mod tests {
             y: 0,
             list: crate::app::state::MenuListState::new(0),
             plugin_items: vec![menu_item()],
+            hidden_builtins: Vec::new(),
         };
         let plugin_idx = menu.builtin_items().len();
         app.state.mode = crate::app::Mode::ContextMenu;
@@ -430,7 +477,79 @@ mod tests {
         state.plugin_workspace_menu = WorkspaceMenuConfig::None;
         state.plugin_workspace_menu_actions = vec!["worktrunk.open".into()];
 
-        assert!(state.workspace_menu_plugin_items(true).is_empty());
+        assert!(state.workspace_menu_plugins(true).items.is_empty());
+    }
+
+    /// A plugin that supersedes a built-in says so, and Herdr drops the entry
+    /// rather than offering two ways to do the same thing.
+    #[test]
+    fn a_listed_action_hides_the_builtin_it_replaces() {
+        let state = state_with(vec![plugin(
+            "worktrunk",
+            vec![replacing_action(
+                "open",
+                "Worktree: switch / create",
+                vec!["new_worktree", "open_worktree"],
+            )],
+        )]);
+
+        let plugins = state.workspace_menu_plugins(true);
+
+        assert_eq!(
+            plugins.hidden_builtins,
+            ["New worktree", "Open worktree..."]
+        );
+    }
+
+    /// The claim rides with the action: filter the action out and the built-in
+    /// comes back, rather than leaving no way to make a worktree at all.
+    #[test]
+    fn an_allowlist_that_drops_the_action_keeps_the_builtin() {
+        let mut state = state_with(vec![plugin(
+            "worktrunk",
+            vec![
+                replacing_action("open", "Worktree: switch / create", vec!["new_worktree"]),
+                action(
+                    "from-issue",
+                    "Worktree: from an issue",
+                    vec![PluginActionContext::Workspace],
+                ),
+            ],
+        )]);
+        state.plugin_workspace_menu_actions = vec!["worktrunk.from-issue".into()];
+
+        let plugins = state.workspace_menu_plugins(true);
+
+        assert_eq!(titles(&state), ["Worktree: from an issue"]);
+        assert!(plugins.hidden_builtins.is_empty());
+    }
+
+    /// An id Herdr does not know hides nothing — the manifest warns about it.
+    #[test]
+    fn an_unknown_replaces_id_hides_nothing() {
+        let state = state_with(vec![plugin(
+            "worktrunk",
+            vec![replacing_action("open", "Open", vec!["rename_workspace"])],
+        )]);
+
+        assert!(state
+            .workspace_menu_plugins(true)
+            .hidden_builtins
+            .is_empty());
+    }
+
+    /// Nothing is hidden where nothing is offered.
+    #[test]
+    fn a_plain_directory_keeps_its_builtins() {
+        let state = state_with(vec![plugin(
+            "worktrunk",
+            vec![replacing_action("open", "Open", vec!["new_worktree"])],
+        )]);
+
+        let plugins = state.workspace_menu_plugins(false);
+
+        assert!(plugins.items.is_empty());
+        assert!(plugins.hidden_builtins.is_empty());
     }
 
     /// The default: a plain directory has nothing for a worktree action to do.

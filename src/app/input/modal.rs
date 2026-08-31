@@ -2221,6 +2221,7 @@ mod tests {
             y: 0,
             list: MenuListState::new(0),
             plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
         let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
 
@@ -2253,6 +2254,7 @@ mod tests {
             y: 0,
             list: MenuListState::new(0),
             plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
         let idx = menu
             .items()
@@ -2302,6 +2304,7 @@ mod tests {
             y: 0,
             list: MenuListState::new(0),
             plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
         let idx = menu
             .items()
@@ -2378,6 +2381,7 @@ mod tests {
             y: 0,
             list: MenuListState::new(0),
             plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
         let idx = menu
             .items()
@@ -2414,6 +2418,7 @@ mod tests {
             y: 0,
             list: MenuListState::new(0),
             plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
         let close_idx = menu
             .items()

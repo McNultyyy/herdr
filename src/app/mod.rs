@@ -6234,6 +6234,7 @@ last_pane = "prefix+tab"
             y: 2,
             list: state::MenuListState::new(1),
             plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         });
         app.state.mode = Mode::ContextMenu;
 

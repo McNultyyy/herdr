@@ -946,6 +946,7 @@ fn plugin_link_list_unlink_round_trip() {
             title: "Bootstrap worktree".into(),
             description: None,
             contexts: vec![PluginActionContext::Workspace],
+            replaces: vec!["new_worktree".into()],
             platforms: None,
             command: vec!["bun".into(), "run".into(), "bootstrap.ts".into()],
         }],
