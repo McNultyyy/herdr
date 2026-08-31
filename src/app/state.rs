@@ -2026,7 +2026,7 @@ impl AppState {
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
-            plugin_workspace_menu: crate::config::WorkspaceMenuConfig::All,
+            plugin_workspace_menu: crate::config::WorkspaceMenuConfig::default(),
             plugin_workspace_menu_actions: Vec::new(),
             next_agent_state_change_seq: 0,
             mouse_capture: true,

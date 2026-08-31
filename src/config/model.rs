@@ -841,21 +841,25 @@ pub struct WorktreesConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct PluginsConfig {
-    /// Which plugin actions declaring contexts = ["workspace"] appear in the
-    /// workspace right-click menu. Ignored when workspace_menu_actions is set.
+    /// Which workspaces list plugin actions declaring contexts = ["workspace"]
+    /// in their right-click menu.
     pub workspace_menu: WorkspaceMenuConfig,
-    /// Qualified plugin action ids ("worktrunk.from-issue") to show in the
-    /// workspace right-click menu, in this order. Replaces workspace_menu.
+    /// Qualified plugin action ids ("worktrunk.from-issue") to list there, in
+    /// this order. Empty lists every eligible action.
     pub workspace_menu_actions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceMenuConfig {
-    /// Every workspace action from every enabled plugin.
+    /// Only workspaces Herdr sees as a git repository or worktree. Plugin
+    /// workspace actions are overwhelmingly git actions, and a plain directory
+    /// has nothing for them to act on.
     #[default]
+    Git,
+    /// Every workspace, git or not.
     All,
-    /// No plugin actions in the menu.
+    /// No plugin actions in any workspace menu.
     None,
 }
 

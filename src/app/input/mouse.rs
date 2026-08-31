@@ -1077,12 +1077,16 @@ impl AppState {
                             })
                         })
                         .unwrap_or(ContextMenuKind::Workspace { ws_idx: idx });
+                    let plugin_items = self.workspace_menu_plugin_items(matches!(
+                        kind,
+                        ContextMenuKind::GitWorkspace { .. }
+                    ));
                     self.context_menu = Some(ContextMenuState {
                         kind,
                         x: mouse.column,
                         y: mouse.row,
                         list: MenuListState::new(0),
-                        plugin_items: self.workspace_menu_plugin_items(),
+                        plugin_items,
                     });
                     self.mode = Mode::ContextMenu;
                 }
@@ -3287,7 +3291,15 @@ mod tests {
     #[test]
     fn right_clicking_a_workspace_row_lists_plugin_workspace_actions() {
         let mut app = app_for_mouse_test();
-        app.state.workspaces = vec![Workspace::test_new("repo")];
+        let mut ws = Workspace::test_new("repo");
+        ws.cached_git_space = Some(crate::workspace::GitSpaceMetadata {
+            key: "repo".into(),
+            checkout_key: "repo".into(),
+            repo_name: "repo".into(),
+            repo_root: std::path::PathBuf::from("/repo"),
+            is_linked_worktree: false,
+        });
+        app.state.workspaces = vec![ws];
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.mode = Mode::Navigate;
@@ -3332,6 +3344,48 @@ mod tests {
                 .map(crate::app::state::ContextMenuPluginItem::qualified_id),
             Some("worktrunk.from-issue".to_string())
         );
+    }
+
+    /// The same row without git metadata: a plain directory gets Herdr's own
+    /// menu and nothing else, which is what `workspace_menu = "git"` means.
+    #[test]
+    fn right_clicking_a_plain_directory_lists_no_plugin_actions() {
+        let mut app = app_for_mouse_test();
+        // test_new() adopts the process's cwd, which is the herdr checkout — a
+        // git repo. Point this one at a directory that is not.
+        let plain =
+            std::env::temp_dir().join(format!("herdr-plain-workspace-{}", std::process::id()));
+        std::fs::create_dir_all(&plain).unwrap();
+        let mut ws = Workspace::test_new("notes");
+        ws.identity_cwd = plain.clone();
+        ws.cached_identity_cwd = plain.clone();
+        ws.cached_git_space = None;
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigate;
+        app.state
+            .install_test_plugins(vec![crate::app::state::test_plugin_info(
+                "worktrunk",
+                vec![crate::app::state::test_plugin_action(
+                    "from-issue",
+                    "Worktree: from an issue",
+                    vec![crate::api::schema::PluginActionContext::Workspace],
+                )],
+            )]);
+
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let row = app.state.view.workspace_card_areas[0].rect;
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            row.x + 1,
+            row.y,
+        ));
+
+        let menu = app.state.context_menu.as_ref().expect("workspace menu");
+        let _ = std::fs::remove_dir_all(&plain);
+        assert_eq!(menu.items(), ["Rename", "Close"]);
+        assert!(menu.plugin_items.is_empty());
     }
 
     #[test]

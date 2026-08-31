@@ -21,14 +21,23 @@ impl AppState {
     /// on disk. Actions are filtered to the ones that could actually run: an
     /// enabled plugin whose manifest is readable, declaring the workspace
     /// context, and supported on this platform.
-    pub(crate) fn workspace_menu_plugin_items(&self) -> Vec<ContextMenuPluginItem> {
-        let allowlist = &self.plugin_workspace_menu_actions;
-        if allowlist.is_empty()
-            && self.plugin_workspace_menu == crate::config::WorkspaceMenuConfig::None
-        {
-            return Vec::new();
+    ///
+    /// `plugins.workspace_menu` decides which workspaces get them at all, and
+    /// by default that is git ones only: a plugin's workspace actions are
+    /// almost always git actions, and a plain directory gives them nothing to
+    /// act on.
+    pub(crate) fn workspace_menu_plugin_items(
+        &self,
+        is_git_workspace: bool,
+    ) -> Vec<ContextMenuPluginItem> {
+        use crate::config::WorkspaceMenuConfig;
+        match self.plugin_workspace_menu {
+            WorkspaceMenuConfig::None => return Vec::new(),
+            WorkspaceMenuConfig::Git if !is_git_workspace => return Vec::new(),
+            _ => {}
         }
 
+        let allowlist = &self.plugin_workspace_menu_actions;
         let mut items: Vec<ContextMenuPluginItem> = Vec::new();
         for plugin in self.installed_plugins.values() {
             if !plugin.enabled || !plugin_manifest_available(plugin) {
@@ -180,8 +189,12 @@ mod tests {
     }
 
     fn titles(state: &AppState) -> Vec<String> {
+        titles_for(state, true)
+    }
+
+    fn titles_for(state: &AppState, is_git_workspace: bool) -> Vec<String> {
         state
-            .workspace_menu_plugin_items()
+            .workspace_menu_plugin_items(is_git_workspace)
             .into_iter()
             .map(|item| item.title)
             .collect()
@@ -261,7 +274,7 @@ mod tests {
         )]);
         state.plugin_workspace_menu = WorkspaceMenuConfig::None;
 
-        assert!(state.workspace_menu_plugin_items().is_empty());
+        assert!(state.workspace_menu_plugin_items(true).is_empty());
     }
 
     #[test]
@@ -406,10 +419,10 @@ mod tests {
         assert_ne!(app.state.mode, crate::app::Mode::ContextMenu);
     }
 
-    /// An allowlist is the stronger statement of the two, so it wins outright
-    /// rather than intersecting with a "none" that was left behind.
+    /// The two settings are orthogonal: the mode says which workspaces get a
+    /// plugin section at all, the list says which actions go in it.
     #[test]
-    fn an_allowlist_overrides_none() {
+    fn none_hides_plugin_actions_even_when_an_allowlist_names_them() {
         let mut state = state_with(vec![plugin(
             "worktrunk",
             vec![action("open", "Open", vec![PluginActionContext::Workspace])],
@@ -417,6 +430,30 @@ mod tests {
         state.plugin_workspace_menu = WorkspaceMenuConfig::None;
         state.plugin_workspace_menu_actions = vec!["worktrunk.open".into()];
 
-        assert_eq!(titles(&state), ["Open"]);
+        assert!(state.workspace_menu_plugin_items(true).is_empty());
+    }
+
+    /// The default: a plain directory has nothing for a worktree action to do.
+    #[test]
+    fn plugin_actions_are_offered_on_git_workspaces_only_by_default() {
+        let state = state_with(vec![plugin(
+            "worktrunk",
+            vec![action("open", "Open", vec![PluginActionContext::Workspace])],
+        )]);
+        assert_eq!(state.plugin_workspace_menu, WorkspaceMenuConfig::Git);
+
+        assert_eq!(titles_for(&state, true), ["Open"]);
+        assert!(titles_for(&state, false).is_empty());
+    }
+
+    #[test]
+    fn all_offers_them_on_a_plain_directory_too() {
+        let mut state = state_with(vec![plugin(
+            "worktrunk",
+            vec![action("open", "Open", vec![PluginActionContext::Workspace])],
+        )]);
+        state.plugin_workspace_menu = WorkspaceMenuConfig::All;
+
+        assert_eq!(titles_for(&state, false), ["Open"]);
     }
 }
