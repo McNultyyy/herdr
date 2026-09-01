@@ -19,6 +19,12 @@ updater treats *any* change of build id as an update
 (`release_info_from_preview_manifest` in `src/update.rs`), which is why fork
 builds do not need a version bump in `Cargo.toml`.
 
+`dist` is the fork's default branch. That is not cosmetic: GitHub only offers
+`workflow_dispatch` for workflows that exist on the default branch, so
+`fork-build.yml` would not be dispatchable otherwise. `master` stays a clean
+mirror of upstream, and every other workflow in the repo is filtered to
+`master` or gated on `herdrdev/herdr`, so none of them fire on pushes here.
+
 ## Cutting a build
 
 ```sh
