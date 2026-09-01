@@ -1,0 +1,205 @@
+name: Fork build
+
+# Publishes a Windows build of this fork as a GitHub release, plus the
+# preview.json manifest that `herdr update` reads. Deliberately manual: run it
+# from the Actions tab or with `gh workflow run fork-build.yml --ref dist`.
+#
+# This file only exists on the fork, so merging or rebasing upstream never
+# touches it. Upstream's own release.yml and preview.yml stay inert here
+# because every job in them is gated on `github.repository == 'herdrdev/herdr'`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      libghostty_optimize:
+        description: libghostty-vt optimize mode
+        required: true
+        default: ReleaseFast
+        type: choice
+        options:
+          - ReleaseFast
+          - ReleaseSafe
+          - Debug
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-build
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  RUST_TOOLCHAIN_VERSION: 1.96.1
+
+jobs:
+  build:
+    if: github.repository != 'herdrdev/herdr'
+    runs-on: windows-2022
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      LIBGHOSTTY_VT_OPTIMIZE: ${{ inputs.libghostty_optimize }}
+      LIBGHOSTTY_VT_SIMD: 'true'
+      ASSET_NAME: herdr-windows-x86_64.zip
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Plan build identity
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          build_id="$(date -u +%Y-%m-%d)-$short_sha"
+          base_version="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+          protocol="$(python scripts/fork_protocol_version.py)"
+          {
+            echo "commit=$commit"
+            echo "short_sha=$short_sha"
+            echo "build_id=$build_id"
+            echo "tag=dist-$build_id"
+            echo "base_version=$base_version"
+            echo "protocol=$protocol"
+            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.15.2
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          key: fork-build-x86_64-pc-windows-msvc
+
+      - name: Remove Zig caches
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force .zig-cache -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force vendor/libghostty-vt/.zig-cache -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force vendor/libghostty-vt/zig-out -ErrorAction SilentlyContinue
+
+      - name: Build
+        env:
+          HERDR_BUILD_CHANNEL: preview
+          HERDR_BUILD_ID: ${{ steps.plan.outputs.build_id }}
+          HERDR_BUILD_COMMIT: ${{ steps.plan.outputs.commit }}
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
+
+      - name: Package artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = Join-Path $env:RUNNER_TEMP "Microsoft.Windows.Console.ConPTY.nupkg"
+          $stage = Join-Path $env:RUNNER_TEMP "herdr-windows-x86_64"
+          .\scripts\package_windows_conpty.ps1 `
+            -HerdrExe target\x86_64-pc-windows-msvc\release\herdr.exe `
+            -PackagePath $package `
+            -StageDir $stage `
+            -OutputPath $env:ASSET_NAME
+          $expected = "${{ steps.plan.outputs.base_version }}-preview.${{ steps.plan.outputs.build_id }}"
+          $version = (& (Join-Path $stage "herdr.exe") --version | Out-String).Trim()
+          if ($version -notmatch [regex]::Escape($expected)) {
+            throw "Packaged binary reports '$version', expected it to contain '$expected'"
+          }
+          Write-Host "packaged $version"
+          $hash = (Get-FileHash -Algorithm SHA256 $env:ASSET_NAME).Hash.ToLowerInvariant()
+          $shas = [ordered]@{ "windows-x86_64" = $hash }
+          ConvertTo-Json $shas | Out-File -Encoding ascii fork-sha256.json
+
+      - name: Generate release notes and manifest
+        shell: bash
+        env:
+          MANIFEST_URL: https://github.com/${{ github.repository }}/releases/latest/download/preview.json
+          REPO: ${{ github.repository }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          BUILD_ID: ${{ steps.plan.outputs.build_id }}
+          COMMIT: ${{ steps.plan.outputs.commit }}
+          SHORT_SHA: ${{ steps.plan.outputs.short_sha }}
+          BASE_VERSION: ${{ steps.plan.outputs.base_version }}
+          BUILT_AT: ${{ steps.plan.outputs.built_at }}
+          PROTOCOL: ${{ steps.plan.outputs.protocol }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # Carry the previous manifest forward so its `builds` history survives:
+          # `herdr --remote` resolves a client binary by build id out of that map.
+          # -f leaves an empty file behind on a 404, which is what the very
+          # first fork build hits.
+          curl -fsSL --max-time 60 -o preview.json "$MANIFEST_URL" || {
+            rm -f preview.json
+            echo "no published manifest yet; starting a fresh one"
+          }
+          previous_commit="$(python scripts/fork_manifest.py previous-commit --manifest preview.json)"
+
+          {
+            echo "Fork build $BUILD_ID"
+            echo
+            echo "Built from \`$SHORT_SHA\` on \`$BRANCH\`."
+            echo "Base stable: v$BASE_VERSION"
+            echo
+            echo "### Changed"
+            changes=""
+            if [ -n "$previous_commit" ] && git cat-file -e "${previous_commit}^{commit}" 2>/dev/null; then
+              changes="$(git log --format='- %s' "$previous_commit..$COMMIT" | head -50)"
+            fi
+            if [ -n "$changes" ]; then
+              echo "$changes"
+            else
+              echo "- Rebuilt \`$BRANCH\` at \`$SHORT_SHA\`."
+            fi
+          } > FORK_NOTES.md
+
+          python scripts/preview.py manifest \
+            --output preview.json \
+            --repo "$REPO" \
+            --tag "$TAG" \
+            --build-id "$BUILD_ID" \
+            --commit "$COMMIT" \
+            --built-at "$BUILT_AT" \
+            --base-version "$BASE_VERSION" \
+            --protocol "$PROTOCOL" \
+            --notes FORK_NOTES.md \
+            --sha-file fork-sha256.json
+
+          # preview.py always emits all five upstream targets. This fork only
+          # builds Windows, so drop the entries that would 404.
+          python scripts/fork_manifest.py keep-windows --manifest preview.json
+          cat preview.json
+
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          BUILD_ID: ${{ steps.plan.outputs.build_id }}
+          COMMIT: ${{ steps.plan.outputs.commit }}
+        run: |
+          set -euo pipefail
+          # --latest is what makes releases/latest/download/preview.json a stable
+          # manifest URL, so a fork build must never be a prerelease.
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$COMMIT" \
+            --title "Fork build $BUILD_ID" \
+            --notes-file FORK_NOTES.md \
+            --latest \
+            "$ASSET_NAME" \
+            preview.json \
+            website/install.ps1
+          echo "published https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"

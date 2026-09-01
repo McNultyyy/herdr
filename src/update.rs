@@ -23,7 +23,10 @@ use interprocess::local_socket::traits::Stream as _;
 use serde::{Deserialize, Deserializer};
 
 const STABLE_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/latest.json";
-const PREVIEW_UPDATE_MANIFEST_URL: &str = "https://herdr.dev/preview.json";
+// Fork builds track this fork's own manifest, published as an asset of the
+// newest McNultyyy/herdr release by .github/workflows/fork-build.yml.
+const PREVIEW_UPDATE_MANIFEST_URL: &str =
+    "https://github.com/McNultyyy/herdr/releases/latest/download/preview.json";
 const HOMEBREW_FORMULA_API_URL: &str = "https://formulae.brew.sh/api/formula/herdr.json";
 const HERDR_UPDATE_COMMAND: &str = "herdr update";
 const HOMEBREW_UPDATE_COMMAND: &str = "brew update && brew upgrade herdr";
@@ -106,9 +109,12 @@ enum UpdateChannel {
 
 impl UpdateChannel {
     fn configured() -> Self {
+        // Fork builds ignore `update.channel`. The stable channel resolves to
+        // upstream's herdr.dev manifest, so honoring a stable setting here
+        // would quietly replace this fork with an upstream release.
         match crate::config::Config::load().config.update.channel {
-            crate::config::UpdateChannelConfig::Stable => Self::Stable,
-            crate::config::UpdateChannelConfig::Preview => Self::Preview,
+            crate::config::UpdateChannelConfig::Stable
+            | crate::config::UpdateChannelConfig::Preview => Self::Preview,
         }
     }
 
