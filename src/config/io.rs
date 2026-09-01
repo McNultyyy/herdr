@@ -9,6 +9,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "experimental",
     "keys",
     "onboarding",
+    "plugins",
     "remote",
     "server",
     "session",
@@ -752,6 +753,9 @@ mod tests {
 
     #[test]
     fn config_diagnostic_summary_uses_compact_actionable_banner() {
+        // Reads HERDR_CONFIG_PATH through config_diagnostic_summary; see
+        // config_diagnostic_summary_reports_default_fallback.
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let diagnostics = vec![
             "one".to_string(),
             "two".to_string(),
@@ -768,6 +772,9 @@ mod tests {
 
     #[test]
     fn config_diagnostic_summary_reports_unknown_keys_compactly() {
+        // Reads HERDR_CONFIG_PATH through config_diagnostic_summary; see
+        // config_diagnostic_summary_reports_default_fallback.
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let diagnostics = vec![
             "unknown config key ui.mouse_captur; ignoring key".to_string(),
             "unknown config key keys.new_tabb; ignoring key".to_string(),
@@ -781,6 +788,9 @@ mod tests {
 
     #[test]
     fn config_diagnostic_summary_keeps_mixed_diagnostics_generic() {
+        // Reads HERDR_CONFIG_PATH through config_diagnostic_summary; see
+        // config_diagnostic_summary_reports_default_fallback.
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let diagnostics = vec![
             "invalid ui config: invalid type: string; keeping current ui settings".to_string(),
             "unknown config key keys.new_tabb; ignoring key".to_string(),
@@ -794,6 +804,10 @@ mod tests {
 
     #[test]
     fn config_diagnostic_summary_reports_default_fallback() {
+        // The summary names the config file, so it reads HERDR_CONFIG_PATH and
+        // has to hold the lock the tests that set that variable take — without
+        // it, this one sees whatever file another test is pointing at.
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let diagnostics = vec![
             "config parse error: TOML parse error at line 33, column 8\n   |\n33 | type = \"popup\"\n   |        ^^^^^^^\nunknown variant `popup`; using defaults"
                 .to_string(),
@@ -807,6 +821,9 @@ mod tests {
 
     #[test]
     fn config_diagnostic_summary_reports_unreadable_config_impact() {
+        // Reads HERDR_CONFIG_PATH through config_diagnostic_summary; see
+        // config_diagnostic_summary_reports_default_fallback.
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let startup = vec!["config read error: permission denied; using defaults".to_string()];
         assert_eq!(
             config_diagnostic_summary(&startup).as_deref(),
@@ -823,6 +840,9 @@ mod tests {
 
     #[test]
     fn config_diagnostic_summary_reports_retained_live_config() {
+        // Reads HERDR_CONFIG_PATH through config_diagnostic_summary; see
+        // config_diagnostic_summary_reports_default_fallback.
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
         let diagnostics = vec![
             "config parse error: TOML parse error at line 7, column 4; keeping current config"
                 .to_string(),
@@ -1030,6 +1050,40 @@ mouse_captur = true
         let _ = std::fs::remove_file(path);
 
         assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+    }
+
+    #[test]
+    fn startup_config_load_accepts_the_plugins_section() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "herdr-config-plugins-section-{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            r#"
+[plugins]
+workspace_menu = "none"
+workspace_menu_actions = ["worktrunk.from-issue"]
+"#,
+        )
+        .unwrap();
+        std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
+
+        let loaded = Config::load();
+
+        std::env::remove_var(CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_file(path);
+
+        assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+        assert_eq!(
+            loaded.config.plugins.workspace_menu,
+            super::super::WorkspaceMenuConfig::None
+        );
+        assert_eq!(
+            loaded.config.plugins.workspace_menu_actions,
+            vec!["worktrunk.from-issue".to_string()]
+        );
     }
 
     #[test]

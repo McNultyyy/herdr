@@ -1417,6 +1417,29 @@
       ]
     },
     {
+      "id": "plugins",
+      "title": "Plugins",
+      "keys": [
+        {
+          "key": "plugins.workspace_menu",
+          "type": "enum",
+          "default": "git",
+          "description": "Which workspaces list plugin actions declaring contexts = [\"workspace\"] in their right-click menu. git lists them on workspaces Herdr sees as a git repository or worktree; all lists them on every workspace; none lists them nowhere.",
+          "values": [
+            "git",
+            "all",
+            "none"
+          ]
+        },
+        {
+          "key": "plugins.workspace_menu_actions",
+          "type": "list of strings",
+          "default": "[]",
+          "description": "Qualified plugin action ids (for example \"worktrunk.from-issue\") to list in the workspace right-click menu, in this order. Empty lists every eligible action. Ids that are unknown, disabled, or unsupported on this platform are skipped. Which workspaces get a list at all is plugins.workspace_menu."
+        }
+      ]
+    },
+    {
       "id": "remote",
       "title": "Remote",
       "keys": [

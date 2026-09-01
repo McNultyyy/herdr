@@ -324,6 +324,7 @@ pub struct Config {
     pub keys: KeysConfig,
     pub ui: UiConfig,
     pub worktrees: WorktreesConfig,
+    pub plugins: PluginsConfig,
     pub advanced: AdvancedConfig,
     pub experimental: ExperimentalConfig,
     pub remote: RemoteConfig,
@@ -835,6 +836,31 @@ pub struct IndexedKeysConfig {
 pub struct WorktreesConfig {
     /// Root directory under which Herdr creates <repo>/<branch-slug> checkouts.
     pub directory: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct PluginsConfig {
+    /// Which workspaces list plugin actions declaring contexts = ["workspace"]
+    /// in their right-click menu.
+    pub workspace_menu: WorkspaceMenuConfig,
+    /// Qualified plugin action ids ("worktrunk.from-issue") to list there, in
+    /// this order. Empty lists every eligible action.
+    pub workspace_menu_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMenuConfig {
+    /// Only workspaces Herdr sees as a git repository or worktree. Plugin
+    /// workspace actions are overwhelmingly git actions, and a plain directory
+    /// has nothing for them to act on.
+    #[default]
+    Git,
+    /// Every workspace, git or not.
+    All,
+    /// No plugin actions in any workspace menu.
+    None,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]

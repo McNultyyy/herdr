@@ -1077,11 +1077,17 @@ impl AppState {
                             })
                         })
                         .unwrap_or(ContextMenuKind::Workspace { ws_idx: idx });
+                    let plugins = self.workspace_menu_plugins(matches!(
+                        kind,
+                        ContextMenuKind::GitWorkspace { .. }
+                    ));
                     self.context_menu = Some(ContextMenuState {
                         kind,
                         x: mouse.column,
                         y: mouse.row,
                         list: MenuListState::new(0),
+                        plugin_items: plugins.items,
+                        hidden_builtins: plugins.hidden_builtins,
                     });
                     self.mode = Mode::ContextMenu;
                 }
@@ -1099,6 +1105,8 @@ impl AppState {
                         x: mouse.column,
                         y: mouse.row,
                         list: MenuListState::new(0),
+                        plugin_items: Vec::new(),
+                        hidden_builtins: Vec::new(),
                     });
                     self.mode = Mode::ContextMenu;
                 }
@@ -1139,6 +1147,8 @@ impl AppState {
                         x: mouse.column,
                         y: mouse.row,
                         list: MenuListState::new(0),
+                        plugin_items: Vec::new(),
+                        hidden_builtins: Vec::new(),
                     });
                     self.mode = Mode::ContextMenu;
                 }
@@ -1251,7 +1261,7 @@ impl AppState {
         let max_item_w = menu
             .items()
             .iter()
-            .map(|item| item.len() as u16)
+            .map(|item| item.chars().count() as u16)
             .max()
             .unwrap_or(0);
         let menu_w = (max_item_w + 4).max(14).min(screen.width.max(1));
@@ -3151,7 +3161,10 @@ mod tests {
                 ..
             } if pane_id == target && source_pane_id == source
         ));
-        assert!(menu.items().contains(&"Swap with focused pane"));
+        assert!(menu
+            .items()
+            .iter()
+            .any(|item| item == "Swap with focused pane"));
     }
 
     #[tokio::test]
@@ -3276,6 +3289,108 @@ mod tests {
         }
     }
 
+    /// The whole open-the-menu path: a right-click on a workspace row resolves
+    /// the installed plugins' workspace actions and lists them after Herdr's own.
+    #[test]
+    fn right_clicking_a_workspace_row_lists_plugin_workspace_actions() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("repo");
+        ws.cached_git_space = Some(crate::workspace::GitSpaceMetadata {
+            key: "repo".into(),
+            checkout_key: "repo".into(),
+            repo_name: "repo".into(),
+            repo_root: std::path::PathBuf::from("/repo"),
+            is_linked_worktree: false,
+        });
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigate;
+        app.state
+            .install_test_plugins(vec![crate::app::state::test_plugin_info(
+                "worktrunk",
+                vec![
+                    crate::app::state::test_plugin_action(
+                        "from-issue",
+                        "Worktree: from an issue",
+                        vec![crate::api::schema::PluginActionContext::Workspace],
+                    ),
+                    crate::app::state::test_plugin_action(
+                        "copy-id",
+                        "Copy pane id",
+                        vec![crate::api::schema::PluginActionContext::Pane],
+                    ),
+                ],
+            )]);
+
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let row = app.state.view.workspace_card_areas[0].rect;
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            row.x + 1,
+            row.y,
+        ));
+
+        let menu = app.state.context_menu.as_ref().expect("workspace menu");
+        let items = menu.items();
+        assert_eq!(
+            items.last().map(String::as_str),
+            Some("Worktree: from an issue"),
+            "plugin actions come after Herdr's own items: {items:?}"
+        );
+        assert!(
+            !items.iter().any(|item| item == "Copy pane id"),
+            "a pane-context action has no business in a workspace menu: {items:?}"
+        );
+        assert_eq!(
+            menu.plugin_item(items.len() - 1)
+                .map(crate::app::state::ContextMenuPluginItem::qualified_id),
+            Some("worktrunk.from-issue".to_string())
+        );
+    }
+
+    /// The same row without git metadata: a plain directory gets Herdr's own
+    /// menu and nothing else, which is what `workspace_menu = "git"` means.
+    #[test]
+    fn right_clicking_a_plain_directory_lists_no_plugin_actions() {
+        let mut app = app_for_mouse_test();
+        // test_new() adopts the process's cwd, which is the herdr checkout — a
+        // git repo. Point this one at a directory that is not.
+        let plain =
+            std::env::temp_dir().join(format!("herdr-plain-workspace-{}", std::process::id()));
+        std::fs::create_dir_all(&plain).unwrap();
+        let mut ws = Workspace::test_new("notes");
+        ws.identity_cwd = plain.clone();
+        ws.cached_identity_cwd = plain.clone();
+        ws.cached_git_space = None;
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.mode = Mode::Navigate;
+        app.state
+            .install_test_plugins(vec![crate::app::state::test_plugin_info(
+                "worktrunk",
+                vec![crate::app::state::test_plugin_action(
+                    "from-issue",
+                    "Worktree: from an issue",
+                    vec![crate::api::schema::PluginActionContext::Workspace],
+                )],
+            )]);
+
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let row = app.state.view.workspace_card_areas[0].rect;
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            row.x + 1,
+            row.y,
+        ));
+
+        let menu = app.state.context_menu.as_ref().expect("workspace menu");
+        let _ = std::fs::remove_dir_all(&plain);
+        assert_eq!(menu.items(), ["Rename", "Close"]);
+        assert!(menu.plugin_items.is_empty());
+    }
+
     #[test]
     fn hovering_context_menu_updates_highlight() {
         let mut app = app_for_mouse_test();
@@ -3284,6 +3399,8 @@ mod tests {
             x: 2,
             y: 2,
             list: MenuListState::new(0),
+            plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         });
         app.state.mode = Mode::ContextMenu;
 
@@ -3578,6 +3695,8 @@ mod tests {
             x: 2,
             y: 2,
             list: MenuListState::new(1),
+            plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         });
         app.state.mode = Mode::ContextMenu;
         handle_context_menu_key(
@@ -3618,6 +3737,8 @@ mod tests {
             x: 2,
             y: 2,
             list: MenuListState::new(1),
+            plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         });
         app.state.mode = Mode::ContextMenu;
 

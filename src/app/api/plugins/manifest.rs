@@ -56,6 +56,8 @@ struct RawPluginManifestAction {
     #[serde(default)]
     contexts: Vec<crate::api::schema::PluginActionContext>,
     #[serde(default)]
+    replaces: Vec<String>,
+    #[serde(default)]
     platforms: Option<Vec<RawPlatform>>,
     command: Vec<String>,
 }
@@ -201,6 +203,7 @@ pub(crate) fn load_plugin_manifest(
     validate_link_handler_actions(&link_handlers, &actions)?;
 
     let mut warnings = validate_event_names(&events);
+    warnings.extend(validate_replaced_menu_items(&actions));
     if platforms.is_none() {
         warnings.push("manifest does not declare platforms; platform support unknown".to_string());
     }
@@ -334,6 +337,21 @@ fn validate_event_names(events: &[crate::api::schema::PluginManifestEventHook]) 
         .collect()
 }
 
+/// A `replaces` id Herdr does not know names no menu item, so it would silently
+/// do nothing — worth saying out loud, the way an unknown event name is.
+fn validate_replaced_menu_items(actions: &[PluginManifestAction]) -> Vec<String> {
+    actions
+        .iter()
+        .flat_map(|action| {
+            action
+                .replaces
+                .iter()
+                .filter(|id| crate::api::schema::builtin_menu_item_label(id).is_none())
+                .map(|id| format!("action '{}' replaces unknown menu item '{}'", action.id, id))
+        })
+        .collect()
+}
+
 fn reject_duplicate_pane_ids(panes: &[PluginManifestPane]) -> Result<(), (&'static str, String)> {
     let mut seen = std::collections::HashSet::new();
     for pane in panes {
@@ -401,6 +419,7 @@ fn normalize_manifest_action(
         title,
         description,
         contexts: action.contexts,
+        replaces: action.replaces,
         platforms,
         command,
     })

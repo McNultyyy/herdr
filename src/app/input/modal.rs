@@ -770,7 +770,8 @@ pub(super) fn apply_context_menu_action(
     menu: ContextMenuState,
     idx: usize,
 ) {
-    let item = menu.items().get(idx).copied();
+    let items = menu.items();
+    let item = items.get(idx).map(String::as_str);
     match (menu.kind, item) {
         (ContextMenuKind::GitWorkspace { ws_idx, .. }, Some("New worktree")) => {
             state.request_new_linked_worktree = Some(ws_idx);
@@ -1198,7 +1199,13 @@ impl App {
     }
 
     pub(crate) fn apply_context_menu_action_via_api(&mut self, menu: ContextMenuState, idx: usize) {
-        let item = menu.items().get(idx).copied();
+        if let Some(plugin_item) = menu.plugin_item(idx).cloned() {
+            self.invoke_context_menu_plugin_action(&menu.kind, &plugin_item);
+            leave_modal(&mut self.state);
+            return;
+        }
+        let items = menu.items();
+        let item = items.get(idx).map(String::as_str);
         match (menu.kind, item) {
             (ContextMenuKind::GitWorkspace { ws_idx, .. }, Some("New worktree")) => {
                 self.state.request_new_linked_worktree = Some(ws_idx);
@@ -2213,6 +2220,8 @@ mod tests {
             x: 0,
             y: 0,
             list: MenuListState::new(0),
+            plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
         let mut terminal_runtimes = crate::terminal::TerminalRuntimeRegistry::new();
 
@@ -2244,6 +2253,8 @@ mod tests {
             x: 0,
             y: 0,
             list: MenuListState::new(0),
+            plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
         let idx = menu
             .items()
@@ -2292,6 +2303,8 @@ mod tests {
             x: 0,
             y: 0,
             list: MenuListState::new(0),
+            plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
         let idx = menu
             .items()
@@ -2367,6 +2380,8 @@ mod tests {
             x: 0,
             y: 0,
             list: MenuListState::new(0),
+            plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
         let idx = menu
             .items()
@@ -2402,6 +2417,8 @@ mod tests {
             x: 0,
             y: 0,
             list: MenuListState::new(0),
+            plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         };
         let close_idx = menu
             .items()

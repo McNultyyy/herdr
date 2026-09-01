@@ -248,6 +248,10 @@ pub struct PluginManifestAction {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub contexts: Vec<PluginActionContext>,
+    /// Built-in menu items this action supersedes, so Herdr can drop them while
+    /// this action is listed. See `BUILTIN_MENU_ITEM_IDS`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platforms: Option<Vec<PluginPlatform>>,
     pub command: Vec<String>,
@@ -358,6 +362,24 @@ pub enum PluginActionContext {
     Tab,
     Pane,
     Selection,
+}
+
+/// The built-in workspace menu items a plugin action may declare it replaces,
+/// paired with the label Herdr draws for each. Only the worktree entries are
+/// replaceable: renaming, closing and collapsing are how the sidebar is
+/// navigated, not work a plugin can take over.
+pub const BUILTIN_MENU_ITEM_IDS: &[(&str, &str)] = &[
+    ("new_worktree", "New worktree"),
+    ("open_worktree", "Open worktree..."),
+    ("remove_worktree", "Delete worktree checkout..."),
+];
+
+/// The menu label for a replaceable built-in id, or None when the id is unknown.
+pub fn builtin_menu_item_label(id: &str) -> Option<&'static str> {
+    BUILTIN_MENU_ITEM_IDS
+        .iter()
+        .find(|(known, _)| *known == id)
+        .map(|(_, label)| *label)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -654,6 +654,8 @@ impl App {
             agent_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),
+            plugin_workspace_menu: config.plugins.workspace_menu,
+            plugin_workspace_menu_actions: config.plugins.workspace_menu_actions.clone(),
             next_agent_state_change_seq: 0,
             mouse_capture: config.ui.mouse_capture,
             copy_on_select: config.ui.copy_on_select,
@@ -1487,6 +1489,9 @@ impl App {
                 self.state.sidebar_min_width = config.ui.sidebar_min_width;
                 self.state.sidebar_max_width = config.ui.sidebar_max_width;
                 self.state.sidebar_collapsed_mode = config.ui.sidebar_collapsed_mode;
+                self.state.plugin_workspace_menu = config.plugins.workspace_menu;
+                self.state.plugin_workspace_menu_actions =
+                    config.plugins.workspace_menu_actions.clone();
                 self.state.mobile_width_threshold = config.ui.mobile_width_threshold;
                 // Re-clamp the live width to the new bounds. No source guard — bounds
                 // always apply, including to widths owned by Persisted or Manual.
@@ -6228,6 +6233,8 @@ last_pane = "prefix+tab"
             x: 2,
             y: 2,
             list: state::MenuListState::new(1),
+            plugin_items: Vec::new(),
+            hidden_builtins: Vec::new(),
         });
         app.state.mode = Mode::ContextMenu;
 
