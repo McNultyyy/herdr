@@ -7,7 +7,17 @@ impl App {
         provided: Option<PluginInvocationContext>,
         correlation_id: &str,
     ) -> PluginInvocationContext {
-        let mut context = self.current_plugin_context(correlation_id);
+        // A caller that names a workspace means that workspace, not the focused
+        // one. A right-clicked sidebar row is usually not the row holding focus,
+        // and filling the rest of the context from focus would hand the action
+        // the wrong repository.
+        let mut context = provided
+            .as_ref()
+            .and_then(|provided| provided.workspace_id.as_deref())
+            .and_then(|workspace_id| {
+                self.plugin_context_for_workspace_id(workspace_id, correlation_id)
+            })
+            .unwrap_or_else(|| self.current_plugin_context(correlation_id));
         if let Some(provided) = provided {
             context.workspace_id = provided.workspace_id.or(context.workspace_id);
             context.workspace_label = provided.workspace_label.or(context.workspace_label);
@@ -357,10 +367,6 @@ impl App {
             .as_ref()
             .and_then(|pane| pane.cwd.clone())
             .or_else(|| Some(self.default_cwd_for_workspace(ws_idx).display().to_string()));
-        let selected_text = focused_pane
-            .as_ref()
-            .and_then(|pane| self.parse_pane_id(&pane.pane_id))
-            .and_then(|(_, pane_id)| self.selected_text_for_pane(pane_id));
         PluginInvocationContext {
             workspace_id: Some(workspace.workspace_id),
             workspace_label: Some(workspace.label),
@@ -372,28 +378,14 @@ impl App {
             focused_pane_cwd: focused_pane.as_ref().and_then(|pane| pane.cwd.clone()),
             focused_pane_agent: focused_pane.as_ref().and_then(|pane| pane.agent.clone()),
             focused_pane_status: focused_pane.as_ref().map(|pane| pane.agent_status),
-            selected_text,
+            // Selection is client presentation state. Client keybindings provide
+            // revision-validated coordinates; API callers can provide explicit context.
+            selected_text: None,
             invocation_source: Some("api".to_string()),
             correlation_id: Some(correlation_id.to_string()),
             clicked_url: None,
             link_handler_id: None,
         }
-    }
-
-    fn selected_text_for_pane(&self, pane_id: crate::layout::PaneId) -> Option<String> {
-        let selection = self.state.selection.as_ref()?;
-        if selection.pane_id != pane_id || !selection.is_visible() {
-            return None;
-        }
-        let terminal_id = self
-            .state
-            .workspaces
-            .iter()
-            .find_map(|workspace| workspace.terminal_id(pane_id))?;
-        self.terminal_runtimes
-            .get(terminal_id)
-            .and_then(|runtime| runtime.extract_selection(selection))
-            .filter(|text| !text.is_empty())
     }
 
     fn default_cwd_for_workspace(&self, ws_idx: usize) -> std::path::PathBuf {

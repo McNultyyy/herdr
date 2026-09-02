@@ -307,6 +307,28 @@ pub struct PluginLogListParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PluginWorkspaceMenuParams {}
+
+/// One plugin action offered in a workspace context menu.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PluginWorkspaceMenuItem {
+    pub plugin_id: String,
+    pub action_id: String,
+    pub title: String,
+}
+
+/// The plugin half of one workspace context menu.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PluginWorkspaceMenuItems {
+    /// Actions to list after Herdr's own items, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<PluginWorkspaceMenuItem>,
+    /// Built-in menu labels to leave out, because a listed action replaces them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_builtins: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PluginActionInvokeParams {
     pub action_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -382,7 +404,7 @@ pub fn builtin_menu_item_label(id: &str) -> Option<&'static str> {
         .map(|(_, label)| *label)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PluginInvocationContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<String>,
