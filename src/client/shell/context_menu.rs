@@ -122,7 +122,10 @@ impl ClientShellState {
         use crate::api::schema::{Method, PluginWorkspaceMenuParams};
 
         let method = Method::PluginWorkspaceMenu(PluginWorkspaceMenuParams {});
-        if !self.supports_endpoint_method(&method) {
+        // Explicit advertisement only: `supports_endpoint_method` treats an
+        // unknown method set as permissive, which is right for a user-driven
+        // action but would fire this unprompted request at every endpoint.
+        if !self.endpoint_advertises_method(&method) {
             return;
         }
         // The warm-up and a menu open land on the same mouse event; one ask is
@@ -196,8 +199,9 @@ impl ClientShellState {
                     .count()
                     >= 2
         });
-        let collapsed =
-            worktree.is_some_and(|worktree| self.collapsed_groups.contains(&worktree.key));
+        let collapsed = worktree.is_some_and(|worktree| {
+            self.group_is_collapsed(&self.active_endpoint_id, &worktree.key)
+        });
         let is_git = worktree.is_some() || workspace.branch.is_some();
         // Drawn from the list the endpoint last resolved: a right-click has to
         // paint now, and an extra round trip per open would show an empty menu
@@ -402,9 +406,8 @@ impl ClientShellState {
                         .map(|worktree| worktree.key.clone())
                 });
                 if let Some(key) = key {
-                    if !self.collapsed_groups.remove(&key) {
-                        self.collapsed_groups.insert(key);
-                    }
+                    let endpoint_id = self.active_endpoint_id.clone();
+                    self.toggle_collapsed_group(&endpoint_id, key);
                     self.persist_chrome_preferences(outcome);
                 }
             }

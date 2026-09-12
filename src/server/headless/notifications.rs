@@ -652,6 +652,7 @@ impl HeadlessServer {
                 }
                 self.reconcile_client_shell_locations();
                 self.finish_shell_location_reconciliation(focus_before, &focused_tabs_before);
+                self.reapply_controlled_shell_tab_geometry(false);
                 for (pane_id, terminal_id) in shutdown_terminals {
                     if self.app.find_pane(pane_id).is_none() {
                         self.shutdown_terminal_stream_clients(
@@ -662,7 +663,7 @@ impl HeadlessServer {
                 }
                 true
             }
-            AppEvent::PaneDied { pane_id }
+            AppEvent::PaneDied { pane_id, .. }
             | AppEvent::WorktreeRuntimeRestoreFailed { pane_id, .. } => {
                 let focus_before = self.shell_focus_targets();
                 let focused_tabs_before = self.focused_shell_tabs();
@@ -698,6 +699,7 @@ impl HeadlessServer {
                 }
                 self.reconcile_client_shell_locations();
                 self.finish_shell_location_reconciliation(focus_before, &focused_tabs_before);
+                self.reapply_controlled_shell_tab_geometry(false);
 
                 if self.app.find_pane(pane_id_val).is_none() {
                     if let Some(terminal_id) = terminal_id {

@@ -23,8 +23,8 @@ pub use self::{
     },
     model::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
-        ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, ShellModeConfig,
-        SidebarCollapsedModeConfig, StatusIndicatorStyle, TabBarPositionConfig,
+        ConfigReloadStatus, HostCursorModeConfig, NewTerminalCwdConfig, PaneBordersConfig,
+        ShellModeConfig, SidebarCollapsedModeConfig, StatusIndicatorStyle, TabBarPositionConfig,
         ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition,
         UpdateChannelConfig, WorkspaceMenuConfig, MAX_TOAST_DELAY_SECONDS,
     },
@@ -93,6 +93,13 @@ pub(crate) fn test_config_env_lock() -> &'static std::sync::Mutex<()> {
 impl Config {
     pub fn should_show_onboarding(&self) -> bool {
         self.onboarding.unwrap_or(true)
+    }
+
+    pub fn kitty_graphics_enabled(&self) -> bool {
+        self.terminal
+            .kitty_graphics
+            .or(self.experimental.kitty_graphics)
+            .unwrap_or(true)
     }
 
     pub fn prefix_key(&self) -> (KeyCode, KeyModifiers) {

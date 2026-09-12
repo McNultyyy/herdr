@@ -325,6 +325,13 @@ impl ClientPaneInputEvent {
     }
 
     pub(crate) fn to_raw_input_event(&self) -> crate::raw_input::RawInputEvent {
+        self.to_raw_input_event_with_windows_source(cfg!(any(windows, test)))
+    }
+
+    fn to_raw_input_event_with_windows_source(
+        &self,
+        attach_windows_source: bool,
+    ) -> crate::raw_input::RawInputEvent {
         match self {
             Self::Key {
                 code,
@@ -344,16 +351,19 @@ impl ClientPaneInputEvent {
                 .with_kind(kind.to_crossterm())
                 .with_repeat_count(*repeat_count)
                 .with_generated_text(generated_text.clone())
-                .with_physical_identity_hint(*tracks_release && generated_text.is_some());
+                .with_physical_identity_hint(*tracks_release && generated_text.is_some())
+                .with_windows_composition_hint(*windows_record);
                 if let Some(shifted_codepoint) = shifted_codepoint {
                     key = key.with_shifted_codepoint(*shifted_codepoint);
                 }
                 #[cfg(any(windows, test))]
-                if let Some(record) = windows_record {
-                    key = key.with_windows_record(*record);
+                if attach_windows_source {
+                    if let Some(record) = windows_record {
+                        key = key.with_windows_record(*record);
+                    }
                 }
                 #[cfg(not(any(windows, test)))]
-                let _ = windows_record;
+                let _ = (attach_windows_source, windows_record);
                 crate::raw_input::RawInputEvent::Key(key)
             }
             Self::TextCommit(text) => {
@@ -2029,6 +2039,87 @@ mod tests {
         assert_eq!(key.code, crossterm::event::KeyCode::Char('7'));
         assert_eq!(key.modifiers, crossterm::event::KeyModifiers::CONTROL);
         assert_eq!(key.windows_record(), Some(windows_record));
+    }
+
+    #[test]
+    fn client_shell_pane_input_reconstructs_windows_dead_key_without_native_source() {
+        let event = ClientPaneInputEvent::Key {
+            code: ClientKeyCode::Char('6'),
+            modifiers: crossterm::event::KeyModifiers::SHIFT.bits(),
+            kind: ClientKeyKind::Press,
+            repeat_count: 1,
+            shifted_codepoint: None,
+            generated_text: None,
+            tracks_release: true,
+            physical_key_id: Some(0x07),
+            windows_record: Some(crate::input::WindowsKeyRecord {
+                key_down: true,
+                repeat_count: 1,
+                virtual_key_code: 0x36,
+                virtual_scan_code: 0x07,
+                unicode: 0,
+                control_key_state: 0x0030,
+            }),
+        };
+        let crate::raw_input::RawInputEvent::Key(key) =
+            event.to_raw_input_event_with_windows_source(false)
+        else {
+            panic!("pane dead key should remain a key");
+        };
+        assert!(key.is_windows_dead_key());
+        assert_eq!(key.windows_record(), None);
+        assert!(crate::input::encode_terminal_key(
+            key,
+            crate::input::KeyboardProtocol::Kitty { flags: 1 },
+        )
+        .is_empty());
+    }
+
+    #[tokio::test]
+    async fn client_shell_remote_altgr_dead_key_emits_only_composed_text() {
+        // Spanish ISO AltGr+4, then Space, captured in #3948:
+        // https://github.com/herdrdev/herdr/issues/3948#issuecomment-5633222390
+        let records = [
+            ('4', ClientKeyKind::Press, 52, 5, 0, 9),
+            ('4', ClientKeyKind::Release, 52, 5, 0, 9),
+            ('~', ClientKeyKind::Press, 32, 57, 126, 0),
+            (' ', ClientKeyKind::Release, 32, 57, 32, 0),
+        ];
+        let (runtime, _rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        let mut output = Vec::new();
+        for (ch, kind, virtual_key_code, virtual_scan_code, unicode, control_key_state) in records {
+            let event = ClientInputEvent::Key {
+                code: ClientKeyCode::Char(ch),
+                modifiers: 0,
+                kind,
+                repeat_count: 1,
+                generated_text: None,
+                source: ClientKeySource::WindowsConsole {
+                    record: crate::input::WindowsKeyRecord {
+                        key_down: kind == ClientKeyKind::Press,
+                        repeat_count: 1,
+                        virtual_key_code,
+                        virtual_scan_code,
+                        unicode,
+                        control_key_state,
+                    },
+                },
+            };
+            let crate::raw_input::RawInputEvent::Key(key) = event.to_raw_input_event() else {
+                panic!("captured input should remain a key");
+            };
+            let pane_event = ClientPaneInputEvent::from_terminal_key(key).expect("pane key");
+            let crate::raw_input::RawInputEvent::Key(key) =
+                pane_event.to_raw_input_event_with_windows_source(false)
+            else {
+                panic!("remote input should remain a key");
+            };
+            let bytes = runtime.encode_terminal_key(key);
+            let expected: &[u8] = if ch == '~' { b"~" } else { b"" };
+            assert_eq!(bytes, expected, "captured {ch:?} {kind:?}");
+            output.extend(bytes);
+        }
+        assert_eq!(output, b"~", "dead key must not insert its base character");
     }
 
     #[test]

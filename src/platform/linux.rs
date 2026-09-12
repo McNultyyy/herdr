@@ -17,7 +17,7 @@ pub(crate) use super::unix_common::{
     create_remote_ssh_config_file, hostname, local_datetime, remote_bridge_endpoint_path,
     remote_private_temp_base, remote_reattach_argument, remote_reattach_program,
     remote_ssh_config_paths, set_default_plugin_pane_pwd, status_commands_supported,
-    StatusCommandGuard,
+    wait_client_stream_readable, StatusCommandGuard,
 };
 
 const WSL_MARKER_ENV_VARS: &[&str] = &["WSL_DISTRO_NAME", "WSL_INTEROP"];
@@ -478,6 +478,13 @@ pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
 }
 
 pub fn read_clipboard_image() -> Option<ClipboardImage> {
+    if running_inside_wsl() {
+        if let Some(image) = read_wsl_clipboard_image_with_command(|program| Command::new(program))
+        {
+            return Some(image);
+        }
+    }
+
     for (mime, extension) in [
         ("image/png", "png"),
         ("image/jpeg", "jpg"),
@@ -506,6 +513,24 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
     }
 
     None
+}
+
+fn read_wsl_clipboard_image_with_command(
+    mut command: impl FnMut(&str) -> Command,
+) -> Option<ClipboardImage> {
+    let mut command = command("powershell.exe");
+    command.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-STA",
+        "-Command",
+        "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $image=[System.Windows.Forms.Clipboard]::GetImage(); if ($null -eq $image) { exit 1 }; $stream=[System.IO.MemoryStream]::new(); try { $image.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png); [Console]::OpenStandardOutput().Write($stream.GetBuffer(), 0, [int]$stream.Length) } finally { $stream.Dispose(); $image.Dispose() }",
+    ]);
+    let bytes = read_clipboard_image_with_spawned_command(command)?;
+    bytes_match_image_signature("png", &bytes).then_some(ClipboardImage {
+        bytes,
+        extension: "png",
+    })
 }
 
 fn read_validated_clipboard_image(
@@ -552,7 +577,7 @@ fn show_desktop_notification_with_command(
     }
 
     let mut cmd = command("notify-send");
-    cmd.arg("--").arg(title);
+    cmd.arg("--app-name").arg("Herdr").arg("--").arg(title);
     if let Some(body) = body.filter(|body| !body.is_empty()) {
         cmd.arg(body);
     }
@@ -1495,6 +1520,24 @@ mod tests {
     }
 
     #[test]
+    fn read_wsl_clipboard_image_accepts_png_from_windows_command() {
+        assert_eq!(
+            read_wsl_clipboard_image_with_command(|program| {
+                assert_eq!(program, "powershell.exe");
+                let mut command = Command::new("sh");
+                command
+                    .arg("-c")
+                    .arg("printf '\\211PNG\\r\\n\\032\\nrest-of-image'");
+                command
+            }),
+            Some(ClipboardImage {
+                bytes: b"\x89PNG\r\n\x1a\nrest-of-image".to_vec(),
+                extension: "png",
+            })
+        );
+    }
+
+    #[test]
     fn image_signatures_match_only_their_format() {
         assert!(bytes_match_image_signature("png", b"\x89PNG\r\n\x1a\n..."));
         assert!(bytes_match_image_signature(
@@ -1526,7 +1569,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_notification_separates_option_like_titles() {
+    fn desktop_notification_sets_app_name_and_separates_option_like_titles() {
         let _guard = env_lock().lock().unwrap();
         unsafe {
             std::env::remove_var("WAYLAND_DISPLAY");
@@ -1549,7 +1592,7 @@ mod tests {
         assert!(shown);
         let args = std::fs::read_to_string(&path).expect("args file");
         let _ = std::fs::remove_file(&path);
-        assert_eq!(args, "--\n-danger\nbody\n");
+        assert_eq!(args, "--app-name\nHerdr\n--\n-danger\nbody\n");
     }
 
     #[test]

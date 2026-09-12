@@ -1,4 +1,7 @@
 # herdr task runner
+set windows-shell := ["cmd.exe", "/d", "/s", "/c"]
+
+python := if os() == "windows" { "python" } else { "python3" }
 
 # Run tests
 test:
@@ -6,26 +9,19 @@ test:
     just maintenance-test
     just ui-hot-path-architecture-test
     just integration-assets-test
-    just plugin-marketplace-test
     just docs-contract-test
 
 # Run repository maintenance contract tests
 maintenance-test:
-    python3 -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty
+    {{python}} -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty scripts.test_windows_cross
 
 # Run one nextest filter, e.g. `just test-one codex_stale_working`
-[unix]
 test-one filter:
     cargo nextest run --locked "{{filter}}" --status-level fail --final-status-level fail --failure-output final --success-output never
 
-[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
-[windows]
-test-one filter:
-    cargo nextest run --locked --bin herdr "{{filter}}" --status-level fail --final-status-level fail --failure-output final --success-output never
-
 # Enforce deterministic UI hot-path architecture boundaries
 ui-hot-path-architecture-test:
-    python3 -m unittest scripts.test_ui_hot_path_architecture
+    {{python}} -m unittest scripts.test_ui_hot_path_architecture
 
 # Run fast local lint checks
 [unix]
@@ -39,19 +35,25 @@ lint:
     & .\scripts\windows_check.ps1 -Mode lint
 
 # Run PR CI checks
-[unix]
 ci filter='all()': lint
+    just ci-tests "{{filter}}"
+
+# Keep the test build independently configurable from clippy in CI.
+ci-tests filter='all()':
     cargo nextest run --locked -E "{{filter}}" --status-level fail --final-status-level slow --failure-output final --success-output never
     just maintenance-test
     just ui-hot-path-architecture-test
     just integration-assets-test
-    just plugin-marketplace-test
+
+# Download the Windows SDK once (requires xwin; prompts for Microsoft's SDK license)
+[unix]
+setup-windows-cross *args:
+    {{python}} scripts/windows_cross.py setup {{args}}
 
 # Run Windows target lint from Unix/macOS to catch cfg(windows) compile and clippy failures before CI
 [unix]
 windows-lint:
-    rustup target add x86_64-pc-windows-msvc
-    LIBGHOSTTY_VT_SIMD=false cargo clippy --bin herdr --locked --target x86_64-pc-windows-msvc -- -D warnings
+    {{python}} scripts/windows_cross.py lint
 
 # Check formatting + run unit tests + Windows target lint + documentation contract tests
 [unix]
@@ -72,12 +74,6 @@ install-hooks:
     @echo "installed git hooks from .githooks"
 
 # Build release binary
-[unix]
-build:
-    cargo build --release --locked
-
-[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
-[windows]
 build:
     cargo build --release --locked
 
@@ -92,7 +88,7 @@ bench-release-smoke:
 
 # Test public documentation snapshot and release lifecycle tooling
 docs-contract-test:
-    bun test scripts/docs/*.test.ts
+    bun test ./scripts/docs
 
 # Test bundled agent integration assets
 integration-assets-test:
@@ -100,9 +96,9 @@ integration-assets-test:
     bun test src/integration/assets/opencode/herdr-agent-state.test.ts
     bun test src/integration/assets/opencode/herdr-tui-session.test.ts
 
-# Run plugin marketplace Worker tests
-plugin-marketplace-test:
-    cd workers/plugin-marketplace && bun install --frozen-lockfile && bun test
+# Regenerate the C API bindings with bindgen-cli 0.72.1
+libghostty-bindings *clang_args:
+    bash scripts/generate_libghostty_bindings.sh {{clang_args}}
 
 # Build the vendored libghostty-vt source dist
 build-libghostty-vt:

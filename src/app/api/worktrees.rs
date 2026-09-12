@@ -794,13 +794,15 @@ mod tests {
 
     fn test_app_with_event_hub(event_hub: crate::api::EventHub) -> App {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
-        App::new(
+        let mut app = App::new(
             &Config::default(),
             crate::app::AppPolicy::TEST,
             None,
             api_rx,
             event_hub,
-        )
+        );
+        app.state.default_shell = test_shell().into();
+        app
     }
 
     #[cfg(windows)]
@@ -815,7 +817,6 @@ mod tests {
 
     fn app_with_parent(repo: &Path) -> App {
         let mut app = test_app();
-        app.state.default_shell = test_shell().into();
         let mut parent = Workspace::test_new("main");
         parent.identity_cwd = repo.to_path_buf();
         app.state.workspaces = vec![parent];
@@ -2318,8 +2319,10 @@ mod tests {
             .pending_worktree_remove_runtime_restores
             .contains_key(&pane_id));
 
-        let pane_updates =
-            app.handle_internal_event_with_pane_updates(AppEvent::PaneDied { pane_id });
+        let pane_updates = app.handle_internal_event_with_pane_updates(AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::ChildExitReason::Exited,
+        });
         assert!(matches!(
             pane_updates.as_slice(),
             [update] if update.agent_released && update.suppress_completion

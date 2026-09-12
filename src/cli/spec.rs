@@ -2,6 +2,9 @@ use std::io::Write;
 
 use clap::{Arg, ArgAction, ArgGroup, Command, ValueHint};
 
+mod completion;
+mod machine;
+
 pub(super) fn command() -> Command {
     let command = Command::new("herdr")
         .about("terminal workspace manager for AI coding agents")
@@ -9,6 +12,7 @@ pub(super) fn command() -> Command {
         .disable_version_flag(true)
         .arg(help_flag())
         .arg(option("session", "NAME").help("Use or create a named persistent session"))
+        .arg(option("machine", "LABEL-OR-ID").help("Run an API command on a saved SSH machine"))
         .arg(option("remote", "TARGET").help("Attach through SSH to a remote Herdr server"))
         .arg(
             option("remote-keybindings", "MODE")
@@ -25,11 +29,12 @@ pub(super) fn command() -> Command {
                 .action(ArgAction::SetTrue)
                 .help("Print version and exit"),
         )
-        .subcommand(completion_command())
+        .subcommand(completion::command())
         .subcommand(update_command())
         .subcommand(status_command())
         .subcommand(config_command())
         .subcommand(channel_command())
+        .subcommand(machine::command())
         .subcommand(server_command())
         .subcommand(api_command())
         .subcommand(workspace_command())
@@ -106,19 +111,6 @@ fn write_requested_help(
     selected.write_long_help(&mut *output)?;
     writeln!(output)?;
     Ok(true)
-}
-
-fn completion_command() -> Command {
-    Command::new("completion")
-        .visible_alias("completions")
-        .about("Generate shell completion scripts")
-        .arg(
-            Arg::new("shell")
-                .value_name("SHELL")
-                .required(true)
-                .value_parser(super::completion::SUPPORTED_SHELLS)
-                .help("Shell to generate completions for"),
-        )
 }
 
 fn update_command() -> Command {

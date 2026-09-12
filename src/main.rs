@@ -114,6 +114,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # "current" for Herdr's process directory, or a fixed path such as "~/Projects".
 # new_cwd = "follow"
 
+# Render pane images in Kitty graphics-compatible outer terminals.
+# kitty_graphics = true
+
 [update]
 # Update channel used by background version checks and `herdr update`.
 # Stable builds default to "stable". Windows preview builds default to "preview"
@@ -282,7 +285,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # prompt_new_workspace_name = false
 
 # Draw borders around split panes.
-# pane_borders = true
+# "auto" draws them only for split panes, "always" also frames a lone pane
+# (only while pane_outer_borders is enabled), "off" disables them.
+# Legacy booleans still parse: true = "auto", false = "off".
+# pane_borders = "auto"
 
 # Draw borders along the outside edge of the pane area.
 # Disable for tmux-style internal splitters without an outside frame.
@@ -327,18 +333,18 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # distinct static glyphs for blocked, working, done, idle, and unknown states.
 # status_indicators = "dots"
 
-# Expanded agent rows. Built-ins are state_icon, state_text, workspace, tab, pane, agent,
-# terminal_title, and terminal_title_stripped.
+# Expanded agent rows. Built-ins are state_icon, state_text, machine, workspace, tab,
+# pane, agent, terminal_title, and terminal_title_stripped.
 # Custom values reported through pane metadata use a $name token.
 # A token occurrence may be styled with { token = "workspace", fg = "#89b4fa", bold = true, dim = false }.
 # Omitted style fields preserve the contextual default.
 # [ui.sidebar.agents]
 # Blank rows between agent entries. Set to 1 to restore the previous spacing.
 # row_gap = 0
-# rows = [["state_icon", "workspace", "tab"], ["agent"]]
+# rows = [["state_icon", "machine", "workspace", "tab"], ["agent"]]
 # Optional canonical agent IDs replace the default rows for matching agents.
 # [ui.sidebar.agents.rows_by_agent]
-# claude = [["state_icon", "workspace", "tab"], ["terminal_title_stripped"], ["agent"]]
+# claude = [["state_icon", "machine", "workspace", "tab"], ["terminal_title_stripped"], ["agent"]]
 
 # Expanded space rows. Built-ins are state_icon, state_text, workspace, branch, and git_status.
 # Custom values reported through workspace metadata use a $name token, for example $jj_status.
@@ -400,9 +406,6 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 [experimental]
 # Allow launching herdr from inside a herdr-managed pane.
 # allow_nested = false
-# Experimental local Kitty graphics rendering for attached clients.
-# Requires a Kitty graphics-compatible outer terminal.
-# kitty_graphics = false
 # Save recent pane screen history across full server restarts.
 pane_history = false
 # While prefix mode is active, temporarily switch the host input source to
@@ -479,6 +482,23 @@ where
         .collect()
 }
 
+fn finish_cli(outcome: io::Result<cli::CommandOutcome>) -> io::Result<()> {
+    match outcome {
+        Ok(cli::CommandOutcome::Handled(code)) => std::process::exit(code),
+        Ok(cli::CommandOutcome::NotCli) => Ok(()),
+        Err(err) if cli::protocol_mismatch_was_reported(&err) => std::process::exit(1),
+        Err(err) if cli::server_not_running_was_reported(&err) => {
+            if let Some(response) = cli::server_not_running_reported_response(&err) {
+                if let Ok(json) = serde_json::to_string(response) {
+                    eprintln!("{json}");
+                }
+            }
+            std::process::exit(1);
+        }
+        Err(err) => Err(err),
+    }
+}
+
 fn main() -> io::Result<()> {
     let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
         Ok(args) => args,
@@ -488,6 +508,9 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    if let Some(outcome) = cli::maybe_run_machine(&raw_args) {
+        return finish_cli(outcome);
+    }
     let args = match session::configure_from_args(&raw_args) {
         Ok(args) => args,
         Err(err) => {
@@ -519,19 +542,10 @@ fn main() -> io::Result<()> {
         std::process::exit(2);
     }
 
-    match cli::maybe_run(&args) {
-        Ok(cli::CommandOutcome::Handled(code)) => std::process::exit(code),
-        Ok(cli::CommandOutcome::NotCli) => {}
-        Err(err) if cli::protocol_mismatch_was_reported(&err) => std::process::exit(1),
-        Err(err) if cli::server_not_running_was_reported(&err) => {
-            if let Some(response) = cli::server_not_running_reported_response(&err) {
-                if let Ok(json) = serde_json::to_string(response) {
-                    eprintln!("{json}");
-                }
-            }
-            std::process::exit(1);
-        }
-        Err(err) => return Err(err),
+    finish_cli(cli::maybe_run(&args))?;
+
+    if args.get(1).map(String::as_str) == Some("remote-api-bridge") {
+        return remote::run_remote_api_bridge(&args[2..]);
     }
 
     // Subcommands and flags (no TUI, no logging needed)
@@ -582,11 +596,13 @@ fn main() -> io::Result<()> {
         println!();
         println!("Usage: herdr [options]");
         println!("       herdr --session <name> [options]");
+        println!("       herdr --machine <label-or-id> <command>");
         println!("       herdr --remote <ssh-target> [--session <name>]");
         println!("       herdr session attach <name>");
         println!("       herdr completion zsh");
         println!("       herdr update [--handoff]");
         println!("       herdr channel set <stable|preview>");
+        println!("       herdr machine <subcommand> ...");
         println!("       herdr server stop");
         println!("       herdr server reload-config");
         println!("       herdr api <subcommand> ...");
@@ -631,6 +647,7 @@ fn main() -> io::Result<()> {
                 "herdr channel <subcommand>",
                 "Manage the stable or preview update channel",
             ),
+            ("herdr machine <subcommand>", "Manage saved SSH machines"),
             (
                 "herdr api <subcommand>",
                 "Inspect socket API metadata and live runtime state",
@@ -673,6 +690,7 @@ fn main() -> io::Result<()> {
         println!();
         println!("Options:");
         println!("  --session <name>    Use or create a named persistent session");
+        println!("  --machine <label-or-id>  Run an API command on a saved SSH machine");
         println!("  --remote <target>   Attach through SSH to a remote Herdr server");
         println!("  --remote-keybindings <local|server>");
         println!("                      Keybindings for --remote app attach (default: local)");
@@ -712,6 +730,7 @@ fn main() -> io::Result<()> {
     // Reject unknown flags
     let known_flags = [
         "--session",
+        "--machine",
         "--remote",
         "--remote-keybindings",
         "--version",
@@ -737,6 +756,7 @@ fn main() -> io::Result<()> {
                 "status",
                 "config",
                 "channel",
+                "machine",
                 "workspace",
                 "worktree",
                 "pane",
@@ -764,7 +784,9 @@ fn main() -> io::Result<()> {
     let loaded_config = config::Config::load();
     exit_if_nested_disabled(&loaded_config.config);
 
-    if let Err(err) = server::autodetect::auto_detect_launch() {
+    let saved_federation =
+        client::endpoint::EndpointCatalog::load().is_ok_and(|catalog| catalog.has_enabled_ssh());
+    if let Err(err) = server::autodetect::auto_detect_launch(saved_federation) {
         eprintln!("herdr: {err}");
         std::process::exit(1);
     }

@@ -248,7 +248,8 @@ impl HeadlessServer {
 
         matches!(
             method,
-            Method::CommandInvoke(_)
+            Method::AgentFocus(_)
+                | Method::CommandInvoke(_)
                 | Method::LayoutSetSplitRatio(_)
                 | Method::PaneClose(_)
                 | Method::PaneCopyMotion(_)
@@ -275,6 +276,34 @@ impl HeadlessServer {
                 | Method::WorkspaceMove(_)
                 | Method::WorkspaceMoveBlock(_)
                 | Method::WorkspaceRename(_)
+                | Method::WorktreeCreate(_)
+                | Method::WorktreeOpen(_)
+                | Method::WorktreeRemove(_)
+        )
+    }
+
+    fn public_request_may_change_geometry(method: &api::schema::Method) -> bool {
+        use api::schema::Method;
+
+        matches!(
+            method,
+            Method::AgentFocus(_)
+                | Method::CommandInvoke(_)
+                | Method::LayoutSetSplitRatio(_)
+                | Method::PaneClose(_)
+                | Method::PaneEditScrollback(_)
+                | Method::PaneFocus(_)
+                | Method::PaneFocusDirection(_)
+                | Method::PaneResize(_)
+                | Method::PaneSplit(_)
+                | Method::PaneSwap(_)
+                | Method::PaneZoom(_)
+                | Method::TabClose(_)
+                | Method::TabCreate(_)
+                | Method::TabFocus(_)
+                | Method::WorkspaceClose(_)
+                | Method::WorkspaceCreate(_)
+                | Method::WorkspaceFocus(_)
                 | Method::WorktreeCreate(_)
                 | Method::WorktreeOpen(_)
                 | Method::WorktreeRemove(_)
@@ -361,7 +390,7 @@ impl HeadlessServer {
         self.clients
             .iter()
             .filter(|(_, client)| {
-                client.is_shell_client() && client.outer_terminal_focus == Some(true)
+                client.is_active_shell_client() && client.outer_terminal_focus == Some(true)
             })
             .filter_map(|(&client_id, _)| self.shell_tab_id_for_client(client_id))
             .collect()
@@ -370,7 +399,7 @@ impl HeadlessServer {
     pub(super) fn shell_focus_targets(&self) -> Vec<(u64, Option<ShellFocusTarget>)> {
         self.clients
             .iter()
-            .filter(|(_, client)| client.is_shell_client())
+            .filter(|(_, client)| client.is_active_shell_client())
             .map(|(&client_id, _)| (client_id, self.shell_focus_target(client_id)))
             .collect()
     }
@@ -522,6 +551,18 @@ impl HeadlessServer {
         target: crate::ui::TabSurfaceTarget,
         start_pending_agent_resumes: bool,
     ) -> bool {
+        if !self.resize_shell_tab_geometry_to_target(client_id, target) {
+            return false;
+        }
+        self.finish_shell_tab_geometry_change(start_pending_agent_resumes);
+        true
+    }
+
+    fn resize_shell_tab_geometry_to_target(
+        &mut self,
+        client_id: u64,
+        target: crate::ui::TabSurfaceTarget,
+    ) -> bool {
         let Some(client) = self.clients.get(&client_id) else {
             return false;
         };
@@ -562,7 +603,6 @@ impl HeadlessServer {
         {
             let _ = resize_popup_runtime(&self.app, Rect::new(0, 0, cols, rows), cell_size);
         }
-        self.finish_shell_tab_geometry_change(start_pending_agent_resumes);
         true
     }
 
@@ -570,15 +610,80 @@ impl HeadlessServer {
         &mut self,
         start_pending_agent_resumes: bool,
     ) -> bool {
-        if self.app_client_count() != 1 {
+        let active_shell_count = self
+            .clients
+            .values()
+            .filter(|client| client.is_active_shell_client() && client.writer.is_some())
+            .count();
+        if active_shell_count != 1 {
             return false;
         }
         let Some(client_id) = self.clients.iter().find_map(|(&client_id, client)| {
-            (client.is_shell_client() && client.writer.is_some()).then_some(client_id)
+            (client.is_active_shell_client() && client.writer.is_some()).then_some(client_id)
         }) else {
             return false;
         };
         self.apply_shell_tab_geometry(client_id, start_pending_agent_resumes)
+    }
+
+    pub(super) fn reapply_controlled_shell_tab_geometry(
+        &mut self,
+        start_pending_agent_resumes: bool,
+    ) -> bool {
+        let mut viewed_tabs = HashMap::<String, Vec<u64>>::new();
+        for (&client_id, client) in &self.clients {
+            if !client.is_active_shell_client() || client.writer.is_none() {
+                continue;
+            }
+            let Some(tab_id) = self.shell_tab_id_for_client(client_id) else {
+                continue;
+            };
+            viewed_tabs.entry(tab_id).or_default().push(client_id);
+        }
+        for viewers in viewed_tabs.values_mut() {
+            viewers.sort_unstable();
+        }
+        for (tab_id, viewers) in viewed_tabs {
+            let controller_is_viewing = self
+                .tab_geometry_controllers
+                .get(&tab_id)
+                .is_some_and(|controller| viewers.contains(controller));
+            if !controller_is_viewing {
+                self.tab_geometry_controllers.insert(tab_id, viewers[0]);
+            }
+        }
+
+        if self.resize_tabs_for_only_shell_client(start_pending_agent_resumes) {
+            return true;
+        }
+
+        let mut controlled_tabs = self
+            .tab_geometry_controllers
+            .iter()
+            .filter_map(|(tab_id, &client_id)| {
+                self.app
+                    .parse_tab_id(tab_id)
+                    .map(|(workspace_index, tab_index)| {
+                        (
+                            tab_id.clone(),
+                            client_id,
+                            crate::ui::TabSurfaceTarget {
+                                workspace_index,
+                                tab_index,
+                            },
+                        )
+                    })
+            })
+            .collect::<Vec<_>>();
+        controlled_tabs.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        let mut reapplied = false;
+        for (_, client_id, target) in controlled_tabs {
+            reapplied |= self.resize_shell_tab_geometry_to_target(client_id, target);
+        }
+        if reapplied {
+            self.finish_shell_tab_geometry_change(start_pending_agent_resumes);
+        }
+        reapplied
     }
 
     pub(super) fn claim_shell_tab_geometry(
@@ -586,6 +691,13 @@ impl HeadlessServer {
         client_id: u64,
         start_pending_agent_resumes: bool,
     ) -> bool {
+        if !self
+            .clients
+            .get(&client_id)
+            .is_some_and(|client| client.shell_surface_active)
+        {
+            return false;
+        }
         let Some(tab_id) = self.shell_tab_id_for_client(client_id) else {
             return false;
         };
@@ -600,6 +712,13 @@ impl HeadlessServer {
         client_id: u64,
         start_pending_agent_resumes: bool,
     ) -> bool {
+        if !self
+            .clients
+            .get(&client_id)
+            .is_some_and(|client| client.shell_surface_active)
+        {
+            return false;
+        }
         let Some(tab_id) = self.shell_tab_id_for_client(client_id) else {
             return false;
         };
@@ -615,6 +734,13 @@ impl HeadlessServer {
         client_id: u64,
         start_pending_agent_resumes: bool,
     ) -> bool {
+        if !self
+            .clients
+            .get(&client_id)
+            .is_some_and(|client| client.shell_surface_active)
+        {
+            return false;
+        }
         let Some(tab_id) = self.shell_tab_id_for_client(client_id) else {
             return false;
         };
@@ -683,6 +809,7 @@ impl HeadlessServer {
     ) -> bool {
         let target_before = self.default_shell_target();
         let popup_before = self.app.state.popup_pane.is_some();
+        let method_claims_geometry = Self::public_request_may_change_geometry(&msg.request.method);
         let explicit_public_focus_target = match &msg.request.method {
             api::schema::Method::WorkspaceFocus(params) => self
                 .app
@@ -714,6 +841,10 @@ impl HeadlessServer {
                 }),
             _ => None,
         };
+        let agent_focus_target = match &msg.request.method {
+            api::schema::Method::AgentFocus(params) => Some(params.target.clone()),
+            _ => None,
+        };
         let create_focus_requested = match &msg.request.method {
             api::schema::Method::WorkspaceCreate(params) => params.focus,
             api::schema::Method::TabCreate(params) => params.focus,
@@ -723,26 +854,42 @@ impl HeadlessServer {
             &msg.request.method,
             api::schema::Method::WorktreeOpen(params) if params.focus
         );
-        let response_proxy = inspect_worktree_open.then(|| {
+        let response_proxy = (agent_focus_target.is_some() || inspect_worktree_open).then(|| {
             let (proxy_tx, proxy_rx) = std::sync::mpsc::channel();
             let original = std::mem::replace(&mut msg.respond_to, proxy_tx);
             (original, proxy_rx)
         });
         let reconcile = Self::shell_locations_may_need_reconcile(&msg.request.method);
         let changed = self.handle_api_request_with_shutdown_check_inner(msg, false);
-        let worktree_open_succeeded = forward_proxied_api_response(response_proxy);
+        let proxied_request_succeeded = forward_proxied_api_response(response_proxy);
+        let successful_agent_focus_target = proxied_request_succeeded
+            .then(|| {
+                agent_focus_target.as_deref().and_then(|target| {
+                    self.app.resolve_agent_target(target).ok().map(|resolved| {
+                        crate::ui::TabSurfaceTarget {
+                            workspace_index: resolved.ws_idx,
+                            tab_index: resolved.tab_idx,
+                        }
+                    })
+                })
+            })
+            .flatten();
         let target_changed = self.default_shell_target() != target_before;
-        let public_focus_succeeded = explicit_public_focus_target
-            .is_some_and(|target| self.default_shell_target() == Some(target))
+        let explicit_focus_succeeded = successful_agent_focus_target
+            .or(explicit_public_focus_target)
+            .is_some_and(|target| self.default_shell_target() == Some(target));
+        let public_focus_succeeded = explicit_focus_succeeded
             || (create_focus_requested && target_changed)
-            || worktree_open_succeeded;
+            || (inspect_worktree_open && proxied_request_succeeded);
         if public_focus_succeeded {
             self.focus_all_shell_clients_on_default_target();
         }
         if reconcile || target_changed || self.app.state.popup_pane.is_some() != popup_before {
             self.reconcile_client_shell_locations();
         }
-        changed
+        let geometry_changed =
+            method_claims_geometry && self.reapply_controlled_shell_tab_geometry(false);
+        changed | geometry_changed
     }
 
     pub(super) fn handle_client_shell_api_request(
@@ -768,10 +915,10 @@ impl HeadlessServer {
         if reconcile || self.app.state.popup_pane.is_some() != popup_before {
             self.reconcile_client_shell_locations();
         }
+        let focus_after = self.shell_focus_target(client_id);
         if let Some(all_focus_before) = all_focus_before {
             self.finish_shell_location_reconciliation(all_focus_before, &focused_tabs_before);
         } else {
-            let focus_after = self.shell_focus_target(client_id);
             let focused_tabs_after = self.focused_shell_tabs();
             self.app.accept_current_focus_without_events();
             self.send_shell_navigation_focus_events(
@@ -781,9 +928,19 @@ impl HeadlessServer {
                 &focused_tabs_after,
             );
         }
+        if focus_before != focus_after {
+            if let Some(target) = focus_after {
+                self.app
+                    .emit_focus_api_events(target.workspace_index, target.pane_id);
+            }
+        }
         let geometry_changed = method_claims_geometry
-            && (self.claim_shell_tab_geometry(client_id, false)
-                || self.resize_shell_tab_if_controller(client_id, false));
+            && if reconcile {
+                self.reapply_controlled_shell_tab_geometry(false)
+            } else {
+                self.claim_shell_tab_geometry(client_id, false)
+                    || self.resize_shell_tab_if_controller(client_id, false)
+            };
         changed | navigation_changed | geometry_changed
     }
 }
