@@ -201,5 +201,5 @@ jobs:
             --latest \
             "$ASSET_NAME" \
             preview.json \
-            website/install.ps1
+            distribution/install.ps1
           echo "published https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
