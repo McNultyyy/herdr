@@ -156,7 +156,7 @@ jobs:
             echo "### Changed"
             changes=""
             if [ -n "$previous_commit" ] && git cat-file -e "${previous_commit}^{commit}" 2>/dev/null; then
-              changes="$(git log --format='- %s' "$previous_commit..$COMMIT" | head -50)"
+              changes="$(git log --max-count=50 --format='- %s' "$previous_commit..$COMMIT")"
             fi
             if [ -n "$changes" ]; then
               echo "$changes"
